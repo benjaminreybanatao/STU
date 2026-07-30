@@ -89,7 +89,7 @@ function wireDropzone(zoneId, inputEl, filenameId, defaultText) {
 
 const omFile = document.getElementById("om-file");
 const xlsxFile = document.getElementById("xlsx-file");
-wireDropzone("om-dropzone", omFile, "om-filename", "Click or drag a .pdf here");
+wireDropzone("om-dropzone", omFile, "om-filename", "Click or drag a .pdf or .pptx here");
 wireDropzone("xlsx-dropzone", xlsxFile, "xlsx-filename", "Click or drag a .xlsx here");
 
 document.getElementById("upload-form").addEventListener("submit", async (e) => {

@@ -1,25 +1,34 @@
 """
-OM (offering memorandum) PDF parser.
+OM (offering memorandum) parser -- accepts either a PDF or a PowerPoint deck,
+since brokers send both.
 
 Two jobs, kept deliberately separate:
   1. extract_facts() - regex/heuristic pull of narrative deal facts out of
      the raw text layer (address, year built, SF/units, occupancy, etc).
-  2. extract_images() - pull embedded raster images out of the PDF and rank
-     them so the "hero photo" picked for slide 1 is an actual building
+  2. extract_images() - pull embedded raster images out of the document and
+     rank them so the "hero photo" picked for slide 1 is an actual building
      photograph, not a logo, chart, or floor-plan line-art graphic.
 
 Both are heuristic by nature -- an OM is free-form marketing prose, not a
 structured document -- so every extracted fact is a best-effort regex match.
 Nothing here is invented; if a pattern doesn't match, the field is simply
 left out of the returned dict and the gap analysis will flag it as missing.
+
+PDF text/images are read via PyMuPDF; PPTX text/images are read via
+python-pptx (PyMuPDF doesn't parse OOXML slide decks). Both formats funnel
+into the same regex fact-extraction and the same image size/aspect filter
+and RGB-normalization, so behavior is identical regardless of source format.
 """
 import io
 import re
-import statistics
 from pathlib import Path
 
 import fitz  # PyMuPDF
 from PIL import Image, ImageChops
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+PPTX_EXTENSIONS = (".pptx", ".pptm")
 
 ADDRESS_RE = re.compile(
     r"\b(\d{2,6}\s+[A-Z][A-Za-z0-9.'\-]*(?:\s+[A-Z][A-Za-z0-9.'\-]*){0,4}"
@@ -56,11 +65,7 @@ def _find_first(pattern: re.Pattern, text: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def extract_facts(pdf_path: str) -> dict:
-    doc = fitz.open(pdf_path)
-    full_text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-
+def _facts_from_text(full_text: str) -> dict:
     facts: dict = {}
 
     address = _find_first(ADDRESS_RE, full_text)
@@ -101,6 +106,36 @@ def extract_facts(pdf_path: str) -> dict:
     return facts
 
 
+def _text_from_pdf(pdf_path: str) -> str:
+    doc = fitz.open(pdf_path)
+    full_text = "\n".join(page.get_text() for page in doc)
+    doc.close()
+    return full_text
+
+
+def _text_from_pptx(pptx_path: str) -> str:
+    prs = Presentation(pptx_path)
+    chunks = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                chunks.append(shape.text_frame.text)
+            if shape.has_table:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            chunks.append(cell.text)
+    return "\n".join(chunks)
+
+
+def extract_facts(om_path: str) -> dict:
+    if om_path.lower().endswith(PPTX_EXTENSIONS):
+        full_text = _text_from_pptx(om_path)
+    else:
+        full_text = _text_from_pdf(om_path)
+    return _facts_from_text(full_text)
+
+
 def _is_adobe_inverted_cmyk(raw_bytes: bytes) -> bool:
     """Some Adobe-pipeline JPEGs (Photoshop/InDesign "YCCK" exports) store
     CMYK channel-inverted, which makes naive CMYK->RGB conversion produce
@@ -120,8 +155,8 @@ def _normalize_to_rgb(raw_bytes: bytes) -> Image.Image:
     """Normalize every extracted image to plain RGB regardless of source
     colorspace (CMYK, grayscale, palette, etc.), so color rendering is
     consistent across PowerPoint, browsers, and the Pillow preview
-    fallback -- rather than passing through whatever colorspace the PDF
-    happened to embed."""
+    fallback -- rather than passing through whatever colorspace the source
+    document happened to embed."""
     img = Image.open(io.BytesIO(raw_bytes))
     if img.mode == "CMYK":
         if _is_adobe_inverted_cmyk(raw_bytes):
@@ -144,16 +179,7 @@ def _is_logo_or_chart(width: int, height: int) -> bool:
     return False
 
 
-def extract_images(pdf_path: str, out_dir: str, max_images: int = 5) -> list[dict]:
-    """Extract embedded raster images, filter out logos/charts/floor plans
-    by size + aspect ratio, and rank the survivors by pixel area (bigger ==
-    more likely to be a full-bleed hero photograph in an OM layout).
-
-    Deterministic: images are always visited in the same (page, xref) order
-    a given PDF produces, and ties are broken by that same order, so the
-    same OM always yields the same ranked list.
-    """
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
+def _extract_images_from_pdf(pdf_path: str, out_dir: str) -> list[dict]:
     doc = fitz.open(pdf_path)
     candidates = []
 
@@ -172,7 +198,7 @@ def extract_images(pdf_path: str, out_dir: str, max_images: int = 5) -> list[dic
                 normalized = _normalize_to_rgb(base_image["image"])
             except Exception:
                 continue
-            filename = f"page{page_index + 1}_xref{xref}.png"
+            filename = f"page{page_index + 1}_el{xref}.png"
             out_path = str(Path(out_dir) / filename)
             normalized.save(out_path)
             candidates.append(
@@ -181,11 +207,66 @@ def extract_images(pdf_path: str, out_dir: str, max_images: int = 5) -> list[dic
                     "width": width,
                     "height": height,
                     "page": page_index + 1,
-                    "xref": xref,
+                    "order_key": xref,
                     "area": width * height,
                 }
             )
 
     doc.close()
-    candidates.sort(key=lambda c: (-c["area"], c["page"], c["xref"]))
+    return candidates
+
+
+def _extract_images_from_pptx(pptx_path: str, out_dir: str) -> list[dict]:
+    prs = Presentation(pptx_path)
+    candidates = []
+
+    for slide_index, slide in enumerate(prs.slides):
+        for shape_index, shape in enumerate(slide.shapes):
+            if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                continue
+            try:
+                image = shape.image
+                width, height = image.size
+            except Exception:
+                continue
+            if _is_logo_or_chart(width, height):
+                continue
+            try:
+                normalized = _normalize_to_rgb(image.blob)
+            except Exception:
+                continue
+            filename = f"slide{slide_index + 1}_el{shape_index}.png"
+            out_path = str(Path(out_dir) / filename)
+            normalized.save(out_path)
+            candidates.append(
+                {
+                    "path": out_path,
+                    "width": width,
+                    "height": height,
+                    "page": slide_index + 1,
+                    "order_key": shape_index,
+                    "area": width * height,
+                }
+            )
+
+    return candidates
+
+
+def extract_images(om_path: str, out_dir: str, max_images: int = 5) -> list[dict]:
+    """Extract embedded raster images, filter out logos/charts/floor plans
+    by size + aspect ratio, and rank the survivors by pixel area (bigger ==
+    more likely to be a full-bleed hero photograph in an OM layout).
+
+    Deterministic: images are always visited in the same (page, order_key)
+    order a given document produces, and ties are broken by that same
+    order, so the same OM always yields the same ranked list.
+    """
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    if om_path.lower().endswith(PPTX_EXTENSIONS):
+        candidates = _extract_images_from_pptx(om_path, out_dir)
+    else:
+        candidates = _extract_images_from_pdf(om_path, out_dir)
+
+    candidates.sort(key=lambda c: (-c["area"], c["page"], c["order_key"]))
     return candidates[:max_images]

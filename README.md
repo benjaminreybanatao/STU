@@ -1,15 +1,16 @@
 # CRE Deal Screen
 
 A demo tool for commercial real estate deal screening. Upload a raw offering
-memorandum (OM) PDF and the firm's underwriting Excel model for a property;
-the tool shows a gap analysis of what's present vs. missing, then generates
-a real, editable two-page offering summary as a `.pptx` file.
+memorandum (OM -- PDF or PPTX) and the firm's underwriting Excel model for a
+property; the tool shows a gap analysis of what's present vs. missing, then
+generates a real, editable two-page offering summary as a `.pptx` file.
 
 ## Architecture
 
-- **Backend** (`backend/`): FastAPI app that does the actual work --
-  PDF text/image extraction (`PyMuPDF`), Excel cell parsing (`openpyxl`),
-  and native PowerPoint generation (`python-pptx`).
+- **Backend** (`backend/`): FastAPI app that does the actual work -- OM
+  text/image extraction (`PyMuPDF` for PDFs, `python-pptx` for PPTX decks --
+  brokers send both), Excel cell parsing (`openpyxl`), and native PowerPoint
+  generation (`python-pptx`).
 - **Frontend** (`frontend/`): a single static page (vanilla HTML/JS) that
   uploads files to the backend and renders the gap-analysis checklist,
   extracted photos, and generated deck preview. Served by the backend at `/`.
@@ -36,7 +37,8 @@ Financing Cost) are intentionally left out rather than fabricated.
 
 Every deal tracks three provenance buckets (`backend/app/schema.py`):
 
-- `om_facts` -- parsed out of the OM PDF's text layer (regex/heuristic).
+- `om_facts` -- parsed out of the OM's text layer (regex/heuristic; PDF via
+  PyMuPDF, PPTX via python-pptx).
 - `model_facts` -- parsed out of the Excel model via label-adjacent cell
   scanning (search for a label like "Levered IRR", read the value next to
   it). This is layout-tolerant by design since every firm's model is laid

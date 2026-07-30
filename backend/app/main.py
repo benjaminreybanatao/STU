@@ -64,16 +64,18 @@ async def create_deal(
     analyst_notes_json: str = Form(default="{}"),
 ):
     if om_file is None and xlsx_file is None:
-        raise HTTPException(400, "Upload at least an OM PDF or an underwriting Excel model.")
+        raise HTTPException(400, "Upload at least an OM (PDF or PPTX) or an underwriting Excel model.")
 
     deal_id = uuid.uuid4().hex[:12]
     work_dir = _deal_work_dir(deal_id)
 
     om_path = None
     if om_file is not None:
-        if not om_file.filename.lower().endswith(".pdf"):
-            raise HTTPException(400, "OM file must be a .pdf")
-        om_path = str(work_dir / "om.pdf")
+        om_name = om_file.filename.lower()
+        if not om_name.endswith((".pdf", ".pptx", ".pptm")):
+            raise HTTPException(400, "OM file must be a .pdf or .pptx")
+        om_ext = ".pdf" if om_name.endswith(".pdf") else Path(om_name).suffix
+        om_path = str(work_dir / f"om{om_ext}")
         with open(om_path, "wb") as f:
             shutil.copyfileobj(om_file.file, f)
 
