@@ -17,6 +17,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.oxml.ns import qn
 from pptx.util import Emu
 
 TARGET_WIDTH_PX = 1600
@@ -62,6 +63,27 @@ def _wrap_text(draw, text, font, max_width_px):
     return lines
 
 
+def _bullet_info(para):
+    """Read marL/indent/buChar/buClr directly off pPr -- python-pptx has no
+    high-level bullet API. Returns (char, marL_emu, hang_emu, color) or None."""
+    pPr = para._p.find(qn("a:pPr"))
+    if pPr is None:
+        return None
+    buChar = pPr.find(qn("a:buChar"))
+    if buChar is None:
+        return None
+    marL = int(pPr.get("marL") or 0)
+    indent = int(pPr.get("indent") or 0)
+    buClr = pPr.find(qn("a:buClr"))
+    color = (50, 55, 65)
+    if buClr is not None:
+        srgb = buClr.find(qn("a:srgbClr"))
+        if srgb is not None:
+            v = srgb.get("val")
+            color = (int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
+    return buChar.get("char", "•"), marL, indent, color
+
+
 def _draw_text_frame(draw, shape, scale, box):
     left, top, width, height = box
     tf = shape.text_frame
@@ -83,7 +105,17 @@ def _draw_text_frame(draw, shape, scale, box):
             color = _rgb(r0.font.color)
         font = _font(size_pt * scale * 1.15, bold)
         align = getattr(para, "alignment", None)
-        lines = _wrap_text(draw, text, font, width - 8)
+
+        bullet = _bullet_info(para)
+        text_indent_px = 0
+        if bullet:
+            char, marL_emu, indent_emu, bullet_color = bullet
+            text_indent_px = marL_emu * scale
+            bullet_x = left + text_indent_px + indent_emu * scale
+            bullet_font = _font(size_pt * scale * 1.15, False)
+            draw.text((bullet_x, y), char, font=bullet_font, fill=bullet_color)
+
+        lines = _wrap_text(draw, text, font, width - 8 - text_indent_px)
         for line in lines:
             line_w = draw.textlength(line, font=font)
             if align is not None and str(align).endswith("CENTER (2)"):
@@ -91,7 +123,7 @@ def _draw_text_frame(draw, shape, scale, box):
             elif align is not None and "RIGHT" in str(align):
                 x = left + max(width - line_w - 4, 0)
             else:
-                x = left + 4
+                x = left + 4 + text_indent_px
             draw.text((x, y), line, font=font, fill=color)
             y += font.size + 4
 

@@ -36,11 +36,14 @@ PLACEHOLDER string. Nothing is fabricated here.
 """
 import re
 
+from lxml import etree
+
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.oxml.ns import qn
 
 from .schema import Deal, FIELD_BY_KEY, PLACEHOLDER
 
@@ -196,6 +199,29 @@ def _build_narrative_paragraphs(deal: Deal) -> list[str]:
     return paras
 
 
+BULLET_INDENT = Pt(16)
+BULLET_HANG = Pt(14)
+
+
+def _set_bullet(paragraph, char="•", color=GREEN):
+    """python-pptx has no high-level bullet API -- set marL/indent plus a
+    buFont/buChar pair directly on the paragraph's pPr, in the schema order
+    CT_TextParagraphProperties requires (after spcAft, before defRPr)."""
+    pPr = paragraph._p.get_or_add_pPr()
+    pPr.set("marL", str(int(BULLET_INDENT)))
+    pPr.set("indent", str(-int(BULLET_HANG)))
+
+    buClr = etree.SubElement(pPr, qn("a:buClr"))
+    solidFill = etree.SubElement(buClr, qn("a:srgbClr"))
+    solidFill.set("val", str(color))
+
+    buFont = etree.SubElement(pPr, qn("a:buFont"))
+    buFont.set("typeface", "Arial")
+
+    buChar = etree.SubElement(pPr, qn("a:buChar"))
+    buChar.set("char", char)
+
+
 def _render_narrative(slide, deal: Deal, left, top, width, height):
     box = slide.shapes.add_textbox(left, top, width, height)
     tf = box.text_frame
@@ -209,6 +235,7 @@ def _render_narrative(slide, deal: Deal, left, top, width, height):
         p = tf.paragraphs[0] if first else tf.add_paragraph()
         first = False
         p.space_after = Pt(10)
+        _set_bullet(p)
 
         # Highlight the defined terms in the opening sentence, and any
         # placeholder text everywhere else, distinctly -- everything else is

@@ -13,11 +13,13 @@ structured document -- so every extracted fact is a best-effort regex match.
 Nothing here is invented; if a pattern doesn't match, the field is simply
 left out of the returned dict and the gap analysis will flag it as missing.
 """
+import io
 import re
 import statistics
 from pathlib import Path
 
 import fitz  # PyMuPDF
+from PIL import Image, ImageChops
 
 ADDRESS_RE = re.compile(
     r"\b(\d{2,6}\s+[A-Z][A-Za-z0-9.'\-]*(?:\s+[A-Z][A-Za-z0-9.'\-]*){0,4}"
@@ -99,6 +101,37 @@ def extract_facts(pdf_path: str) -> dict:
     return facts
 
 
+def _is_adobe_inverted_cmyk(raw_bytes: bytes) -> bool:
+    """Some Adobe-pipeline JPEGs (Photoshop/InDesign "YCCK" exports) store
+    CMYK channel-inverted, which makes naive CMYK->RGB conversion produce
+    wrong colors. The JPEG APP14 marker's transform byte -- not just the
+    presence of the "Adobe" string, which Pillow's own CMYK encoder also
+    writes without inverting -- distinguishes the two: transform == 2
+    (YCCK) is the documented inverted case; transform == 0 (plain CMYK,
+    e.g. Pillow's own output) is not."""
+    idx = raw_bytes.find(b"Adobe")
+    if idx == -1 or idx + 11 > len(raw_bytes):
+        return False
+    transform_byte = raw_bytes[idx + 10]
+    return transform_byte == 2
+
+
+def _normalize_to_rgb(raw_bytes: bytes) -> Image.Image:
+    """Normalize every extracted image to plain RGB regardless of source
+    colorspace (CMYK, grayscale, palette, etc.), so color rendering is
+    consistent across PowerPoint, browsers, and the Pillow preview
+    fallback -- rather than passing through whatever colorspace the PDF
+    happened to embed."""
+    img = Image.open(io.BytesIO(raw_bytes))
+    if img.mode == "CMYK":
+        if _is_adobe_inverted_cmyk(raw_bytes):
+            img = ImageChops.invert(img)
+        img = img.convert("RGB")
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    return img
+
+
 def _is_logo_or_chart(width: int, height: int) -> bool:
     """Heuristic filter: reject tiny icons, thin banners, and near-square
     small graphics that are almost always logos/charts/floor plans rather
@@ -135,11 +168,13 @@ def extract_images(pdf_path: str, out_dir: str, max_images: int = 5) -> list[dic
             width, height = base_image.get("width", 0), base_image.get("height", 0)
             if _is_logo_or_chart(width, height):
                 continue
-            ext = base_image.get("ext", "png")
-            filename = f"page{page_index + 1}_xref{xref}.{ext}"
+            try:
+                normalized = _normalize_to_rgb(base_image["image"])
+            except Exception:
+                continue
+            filename = f"page{page_index + 1}_xref{xref}.png"
             out_path = str(Path(out_dir) / filename)
-            with open(out_path, "wb") as f:
-                f.write(base_image["image"])
+            normalized.save(out_path)
             candidates.append(
                 {
                     "path": out_path,
