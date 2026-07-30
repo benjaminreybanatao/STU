@@ -1,4 +1,6 @@
 import json
+import logging
+import os
 import shutil
 import subprocess
 import uuid
@@ -6,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import fitz  # PyMuPDF -- used to rasterize the LibreOffice-rendered PDF preview
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import Depends, FastAPI, Header, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,16 +17,46 @@ from .pipeline import build_deal, generate_deck
 from .preview_renderer import render_pptx_to_png
 from .schema import Deal
 
+logger = logging.getLogger("uvicorn.error")
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "run_data"
 DATA_DIR.mkdir(exist_ok=True)
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 
-app = FastAPI(title="CRE Deal Screen")
+# Every deal handled here can contain confidential underwriting data, so all
+# /api/* routes require a shared access code (ACCESS_CODE env var). Falls
+# back to a well-known default rather than silently running wide open if
+# someone forgets to set it -- but that fallback is loudly logged, since it
+# provides no real protection.
+ACCESS_CODE = os.environ.get("ACCESS_CODE")
+if not ACCESS_CODE:
+    ACCESS_CODE = "changeme"
+    logger.warning(
+        "ACCESS_CODE is not set -- falling back to the default 'changeme', "
+        "which provides no real protection. Set ACCESS_CODE in your deployment "
+        "environment before pointing real deal data at this service."
+    )
+
+
+def require_access_code(x_access_code: str | None = Header(default=None), code: str | None = None):
+    # Accept the code via header (used by fetch() JSON calls) or a query
+    # param (used by plain <img>/<a> GETs for images/previews/downloads,
+    # which can't attach custom headers).
+    if ACCESS_CODE not in (x_access_code, code):
+        raise HTTPException(401, "Missing or invalid access code.")
+
+
+# Restrict cross-origin calls to a known frontend origin when deployed
+# separately (e.g. GitHub Pages calling a Render-hosted backend); defaults to
+# "*" for local development where frontend and backend share an origin.
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
+
+app = FastAPI(title="CRE Deal Screen", dependencies=[Depends(require_access_code)])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[ALLOWED_ORIGIN],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -55,6 +87,14 @@ def _images_payload(deal: Deal, deal_id: str) -> list[dict]:
             }
         )
     return out
+
+
+@app.get("/api/auth/check")
+async def auth_check():
+    """No-op endpoint the frontend calls to validate a stored access code
+    without side effects -- the require_access_code dependency above already
+    rejects the request with 401 before this body ever runs if it's wrong."""
+    return {"ok": True}
 
 
 @app.post("/api/deals")

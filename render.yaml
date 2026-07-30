@@ -7,3 +7,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     autoDeploy: true
+    envVars:
+      - key: ACCESS_CODE
+        sync: false # set a real shared access code in the Render dashboard -- do not commit one here
+      - key: ALLOWED_ORIGIN
+        sync: false # e.g. https://<user>.github.io -- restricts CORS to your deployed frontend

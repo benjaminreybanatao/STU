@@ -4,11 +4,38 @@ const state = {
   images: [],
 };
 
+const ACCESS_CODE_KEY = "stu_access_code";
+
 // window.API_BASE is set in config.js -- "" for same-origin (backend serves
 // this frontend directly), or an absolute URL when this page is hosted
 // separately (e.g. GitHub Pages) from the backend.
 function apiUrl(path) {
   return (window.API_BASE || "") + path;
+}
+
+// Every deal can contain confidential documents, so the backend gates all
+// /api/* routes behind a shared access code. fetch() calls send it as a
+// header; plain <img>/<a> GETs (images, previews, downloads) can't attach
+// custom headers, so those append it as a query param instead -- the
+// backend's require_access_code dependency accepts either.
+function getAccessCode() {
+  return sessionStorage.getItem(ACCESS_CODE_KEY) || "";
+}
+
+function mediaUrl(path) {
+  const code = getAccessCode();
+  const sep = path.includes("?") ? "&" : "?";
+  return apiUrl(path) + (code ? `${sep}code=${encodeURIComponent(code)}` : "");
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { ...(options.headers || {}), "X-Access-Code": getAccessCode() };
+  const res = await fetch(apiUrl(path), { ...options, headers });
+  if (res.status === 401) {
+    sessionStorage.removeItem(ACCESS_CODE_KEY);
+    showAccessGate("Session expired -- please re-enter the access code.");
+  }
+  return res;
 }
 
 const GROUP_LABELS = {
@@ -19,6 +46,68 @@ const GROUP_LABELS = {
   returns: "Returns",
   assumptions: "Assumptions",
 };
+
+// ---------- access gate ----------
+
+function showAccessGate(errorMessage) {
+  const gate = document.getElementById("access-gate");
+  const main = document.getElementById("app-main");
+  gate.classList.remove("hidden");
+  main.classList.add("app-locked");
+  const errorEl = document.getElementById("access-error");
+  if (errorMessage) {
+    errorEl.textContent = errorMessage;
+    errorEl.classList.remove("hidden");
+  } else {
+    errorEl.classList.add("hidden");
+  }
+  document.getElementById("access-code-input").focus();
+}
+
+function hideAccessGate() {
+  document.getElementById("access-gate").classList.add("hidden");
+  document.getElementById("app-main").classList.remove("app-locked");
+}
+
+async function tryAccessCode(code, { onFail } = {}) {
+  const res = await fetch(apiUrl("/api/auth/check"), { headers: { "X-Access-Code": code } });
+  if (res.ok) {
+    sessionStorage.setItem(ACCESS_CODE_KEY, code);
+    hideAccessGate();
+    return true;
+  }
+  sessionStorage.removeItem(ACCESS_CODE_KEY);
+  if (onFail) onFail();
+  return false;
+}
+
+document.getElementById("access-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("access-code-input");
+  const btn = e.target.querySelector("button");
+  setButtonLoading(btn, true, "Checking…", "Continue");
+  const ok = await tryAccessCode(input.value, {
+    onFail: () => {
+      input.classList.remove("shake");
+      void input.offsetWidth;
+      input.classList.add("shake");
+      document.getElementById("access-error").classList.remove("hidden");
+    },
+  });
+  setButtonLoading(btn, false, "", "Continue");
+  if (!ok) input.select();
+});
+
+// Validate a stored code on load (it may be stale from a previous session
+// or a rotated ACCESS_CODE) rather than trusting it blindly.
+(async () => {
+  const stored = getAccessCode();
+  if (stored) {
+    await tryAccessCode(stored, { onFail: () => showAccessGate() });
+  } else {
+    showAccessGate();
+  }
+})();
 
 // ---------- small motion helpers ----------
 
@@ -107,7 +196,7 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
   fd.append("analyst_notes_json", "{}");
 
   try {
-    const res = await fetch(apiUrl("/api/deals"), { method: "POST", body: fd });
+    const res = await apiFetch("/api/deals", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     state.dealId = data.deal_id;
@@ -197,7 +286,7 @@ function renderGapTable() {
 
 async function submitAnalystInput(key, value, inputEl) {
   if (!value) return;
-  const res = await fetch(apiUrl(`/api/deals/${state.dealId}/analyst-inputs`), {
+  const res = await apiFetch(`/api/deals/${state.dealId}/analyst-inputs`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ [key]: value }),
@@ -215,10 +304,10 @@ function renderImages() {
     const tile = document.createElement("div");
     tile.className = "img-tile" + (idx === 0 ? " selected" : "");
     tile.style.animationDelay = `${idx * 60}ms`;
-    tile.innerHTML = `<img src="${apiUrl(img.url)}" /> ${idx === 0 ? '<span class="star">&#9733;</span>' : ""}`;
+    tile.innerHTML = `<img src="${mediaUrl(img.url)}" /> ${idx === 0 ? '<span class="star">&#9733;</span>' : ""}`;
     tile.addEventListener("click", async () => {
       const filename = img.url.split("/").pop();
-      await fetch(apiUrl(`/api/deals/${state.dealId}/select-hero-image`), {
+      await apiFetch(`/api/deals/${state.dealId}/select-hero-image`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename }),
@@ -239,14 +328,14 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
   setStep(3, { complete: [1, 2] });
 
   try {
-    const res = await fetch(apiUrl(`/api/deals/${state.dealId}/generate`), { method: "POST" });
+    const res = await apiFetch(`/api/deals/${state.dealId}/generate`, { method: "POST" });
     const data = await res.json();
     const grid = document.getElementById("preview-grid");
     grid.innerHTML = "";
     if (data.preview_images && data.preview_images.length) {
       data.preview_images.forEach((url, idx) => {
         const img = document.createElement("img");
-        img.src = apiUrl(url);
+        img.src = mediaUrl(url);
         img.style.animationDelay = `${idx * 120}ms`;
         grid.appendChild(img);
       });
@@ -256,7 +345,7 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
         (data.preview_error || "unknown error") + ") -- download the PPTX to view it.";
     }
     const link = document.getElementById("download-link");
-    link.href = apiUrl(`/api/deals/${state.dealId}/download`);
+    link.href = mediaUrl(`/api/deals/${state.dealId}/download`);
     link.classList.remove("hidden");
     setStep(3, { complete: [1, 2, 3] });
   } catch (err) {
