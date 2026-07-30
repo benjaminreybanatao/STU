@@ -37,6 +37,6 @@ def downside_variant(deal: Deal) -> Deal | None:
 
 
 def generate_deck(deal: Deal, output_path: str) -> str:
-    hero_image = deal.om_images[0]["path"] if deal.om_images else None
+    hero_images = [img["path"] for img in deal.om_images[:2]]
     downside = downside_variant(deal)
-    return build_deck(deal, hero_image, output_path, downside_deal=downside)
+    return build_deck(deal, hero_images, output_path, downside_deal=downside)
