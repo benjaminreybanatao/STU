@@ -4,6 +4,13 @@ const state = {
   images: [],
 };
 
+// window.API_BASE is set in config.js -- "" for same-origin (backend serves
+// this frontend directly), or an absolute URL when this page is hosted
+// separately (e.g. GitHub Pages) from the backend.
+function apiUrl(path) {
+  return (window.API_BASE || "") + path;
+}
+
 const GROUP_LABELS = {
   property: "Property",
   tenancy: "Tenancy",
@@ -43,7 +50,7 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
   fd.append("analyst_notes_json", "{}");
 
   try {
-    const res = await fetch("/api/deals", { method: "POST", body: fd });
+    const res = await fetch(apiUrl("/api/deals"), { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     state.dealId = data.deal_id;
@@ -115,7 +122,7 @@ function renderGapTable() {
 
 async function submitAnalystInput(key, value) {
   if (!value) return;
-  const res = await fetch(`/api/deals/${state.dealId}/analyst-inputs`, {
+  const res = await fetch(apiUrl(`/api/deals/${state.dealId}/analyst-inputs`), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ [key]: value }),
@@ -131,10 +138,10 @@ function renderImages() {
   state.images.forEach((img, idx) => {
     const tile = document.createElement("div");
     tile.className = "img-tile" + (idx === 0 ? " selected" : "");
-    tile.innerHTML = `<img src="${img.url}" /> ${idx === 0 ? '<span class="star">&#9733;</span>' : ""}`;
+    tile.innerHTML = `<img src="${apiUrl(img.url)}" /> ${idx === 0 ? '<span class="star">&#9733;</span>' : ""}`;
     tile.addEventListener("click", async () => {
       const filename = img.url.split("/").pop();
-      await fetch(`/api/deals/${state.dealId}/select-hero-image`, {
+      await fetch(apiUrl(`/api/deals/${state.dealId}/select-hero-image`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename }),
@@ -155,14 +162,14 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
   status.textContent = "Building deck and rendering preview -- this can take a few seconds.";
 
   try {
-    const res = await fetch(`/api/deals/${state.dealId}/generate`, { method: "POST" });
+    const res = await fetch(apiUrl(`/api/deals/${state.dealId}/generate`), { method: "POST" });
     const data = await res.json();
     const grid = document.getElementById("preview-grid");
     grid.innerHTML = "";
     if (data.preview_images && data.preview_images.length) {
       data.preview_images.forEach((url) => {
         const img = document.createElement("img");
-        img.src = url;
+        img.src = apiUrl(url);
         grid.appendChild(img);
       });
       status.textContent = "";
@@ -171,7 +178,7 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
         (data.preview_error || "unknown error") + ") -- download the PPTX to view it.";
     }
     const link = document.getElementById("download-link");
-    link.href = `/api/deals/${state.dealId}/download`;
+    link.href = apiUrl(`/api/deals/${state.dealId}/download`);
     link.classList.remove("hidden");
   } catch (err) {
     status.textContent = "Failed to generate deck: " + err.message;
