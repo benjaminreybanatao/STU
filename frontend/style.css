@@ -71,6 +71,13 @@ h1, h2, h3, .sans, button, .badge, .dz-title, .gap-group-label {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+.title-expansion {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: #cfd1d2;
+  font-size: 13px;
+}
 .tagline { margin: 0; color: #cfd1d2; font-size: 12.5px; font-family: "Gandhi Serif", Georgia, serif; font-style: italic; }
 .topbar-accent { width: 140px; background: var(--green); flex-shrink: 0; }
 
