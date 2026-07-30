@@ -2,395 +2,379 @@
 Builds the two-page (or three-page, if a downside case is present) offering
 summary deck.
 
-No reference firm template was supplied for this build, so the layout below
-is a clean, generic institutional two-pager: navy header band, gold accent
-rule, a hero photo pulled from the OM, a woven narrative paragraph, and a
-native (editable) return-summary table. If a real firm deck is provided
-later, this module is the one place to reverse-engineer its exact fonts,
-colors, logo placement, and table style into -- the rest of the pipeline
-(parsing, gap analysis, field resolution) does not need to change.
+Reverse-engineered from two real DivcoWest ("DW") two-pager decks (400 Castro,
+2390 Mission College), inspected directly via python-pptx + raw XML/theme
+parsing:
+
+  - Theme: "DW Colors 2021" (ppt/theme/theme1.xml) -- accent1 green #6AA23A,
+    accent3 navy #002554, accent6 gold #E9A800, dk2 gray #626369, white bg.
+  - Fonts: "Gandhi Sans" for titles/labels/headers, "Gandhi Serif" for body
+    narrative copy.
+  - Slide 1 ("Transaction Summary"): plain white background, no header band.
+    Title top-left reads "TRANSACTION SUMMARY / {SHORT ADDRESS}", 28pt bold
+    Gandhi Sans, black with the property name in green (#6AA442, matches
+    exactly across both source decks). Two stacked property photos on the
+    left; a narrative textbox on the right written as one short paragraph
+    per topic (not one merged block) in 12-12.5pt Gandhi Serif, with defined
+    terms ("Investment"/"Property") highlighted in dark green (#3A592A).
+  - Slide 2 ("Base Case"): same title style. In both source decks this is a
+    single pasted image of a financial summary exhibit (a paste from Excel --
+    exactly the "PDF/PPT export with embedded images" case flagged in the
+    spec). Decoding the embedded EMF's text records recovered its structure:
+    Property Overview / Pricing / Debt / Equity / Gross Returns panels, each
+    a small label/value table. That structure is rebuilt here as native,
+    editable pptx tables -- not a pasted image -- using only fields this
+    tool can actually trace to the OM/model/analyst input. (Line items from
+    the source decks that require a granular Sources & Uses breakdown this
+    tool doesn't parse -- Acquisition Cost, DD/Closing Costs, Working
+    Capital, Financing Cost -- are intentionally omitted rather than
+    fabricated.)
 
 Every value placed on the slide comes from Deal.display_value(), which
 walks the OM -> model -> analyst provenance chain and falls back to the
 PLACEHOLDER string. Nothing is fabricated here.
 """
+import re
+
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
-from pptx.oxml.ns import qn
 
 from .schema import Deal, FIELD_BY_KEY, PLACEHOLDER
 
-NAVY = RGBColor(0x14, 0x24, 0x40)
-GOLD = RGBColor(0xB8, 0x8A, 0x2E)
-SLATE = RGBColor(0x3B, 0x44, 0x54)
-LIGHT_GRAY = RGBColor(0xF1, 0xF2, 0xF4)
+# DW Colors 2021 theme, read directly out of ppt/theme/theme1.xml.
+BLACK = RGBColor(0x00, 0x00, 0x00)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+GRAY_DARK = RGBColor(0x62, 0x63, 0x69)   # dk2
+GRAY_LIGHT = RGBColor(0x95, 0x96, 0x9A)  # lt2
+NAVY = RGBColor(0x00, 0x25, 0x54)        # accent3
+GOLD = RGBColor(0xE9, 0xA8, 0x00)        # accent6
+GREEN = RGBColor(0x6A, 0xA4, 0x42)       # title property-name highlight (exact value in both source decks)
+DARK_GREEN = RGBColor(0x3A, 0x59, 0x2A)  # defined-term highlight in body copy
+ROW_ALT = RGBColor(0xF3, 0xF4, 0xF5)
+BORDER_GRAY = RGBColor(0xD9, 0xDA, 0xDC)
 PLACEHOLDER_RED = RGBColor(0xB0, 0x2A, 0x2A)
+
+SANS = "Gandhi Sans"
+SERIF = "Gandhi Serif"
 
 SLIDE_W = Inches(13.333)
 SLIDE_H = Inches(7.5)
 
-FONT = "Calibri"
+TITLE_LEFT = Inches(0.545)
+TITLE_TOP = Inches(0.813)
+TITLE_HEIGHT = Inches(0.542)
 
-RETURN_TABLE_KEYS = [
-    "purchase_price",
-    "price_per_unit",
-    "going_in_cap",
-    "exit_cap",
-    "leverage",
-    "debt_rate",
-    "initial_equity",
-    "peak_equity",
-    "hold_period",
-    "unlevered_irr",
-    "levered_irr",
-    "unlevered_em",
-    "levered_em",
-    "cash_on_cash",
+PANELS = [
+    ("Property Overview", ["address", "property_type", "sf_or_units", "occupancy", "hold_period"]),
+    ("Pricing", ["purchase_price", "price_per_unit", "going_in_cap", "exit_cap"]),
+    ("Debt", ["leverage", "debt_rate"]),
+    ("Equity", ["initial_equity", "peak_equity"]),
+    ("Gross Returns", ["unlevered_irr", "unlevered_em", "levered_irr", "levered_em", "cash_on_cash"]),
 ]
 
 
-def _set_cell_text(cell, text, *, bold=False, size=12, color=SLATE, align=PP_ALIGN.LEFT, font=FONT):
-    cell.text = str(text)
-    p = cell.text_frame.paragraphs[0]
-    p.alignment = align
-    run = p.runs[0]
-    run.font.size = Pt(size)
-    run.font.bold = bold
-    run.font.name = font
-    run.font.color.rgb = color
+def _strip_street_suffix(street: str) -> str:
+    """'400 Castro Street' -> '400 Castro' -- both source decks drop the
+    street-type suffix when using the address as the property's short name."""
+    stripped = re.sub(r"\b(Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr)\b\.?", "", street, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", stripped).strip()
 
 
-def _add_header_band(slide, title_text, subtitle_text=""):
-    band = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, Inches(1.05))
-    band.fill.solid()
-    band.fill.fore_color.rgb = NAVY
-    band.line.fill.background()
-    band.shadow.inherit = False
-
-    rule = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, Inches(1.05), SLIDE_W, Inches(0.06))
-    rule.fill.solid()
-    rule.fill.fore_color.rgb = GOLD
-    rule.line.fill.background()
-    rule.shadow.inherit = False
-
-    title_box = slide.shapes.add_textbox(Inches(0.45), Inches(0.14), Inches(9.5), Inches(0.5))
-    tf = title_box.text_frame
-    tf.text = title_text
-    p = tf.paragraphs[0]
-    p.runs[0].font.size = Pt(24)
-    p.runs[0].font.bold = True
-    p.runs[0].font.name = FONT
-    p.runs[0].font.color.rgb = WHITE
-
-    if subtitle_text:
-        sub_box = slide.shapes.add_textbox(Inches(0.45), Inches(0.62), Inches(9.5), Inches(0.35))
-        tf2 = sub_box.text_frame
-        tf2.text = subtitle_text
-        p2 = tf2.paragraphs[0]
-        p2.runs[0].font.size = Pt(13)
-        p2.runs[0].font.name = FONT
-        p2.runs[0].font.color.rgb = RGBColor(0xC9, 0xCE, 0xDA)
-
-    logo_box = slide.shapes.add_textbox(Inches(10.3), Inches(0.3), Inches(2.6), Inches(0.5))
-    tf3 = logo_box.text_frame
-    tf3.text = "[FIRM LOGO]"
-    p3 = tf3.paragraphs[0]
-    p3.alignment = PP_ALIGN.RIGHT
-    p3.runs[0].font.size = Pt(12)
-    p3.runs[0].font.italic = True
-    p3.runs[0].font.name = FONT
-    p3.runs[0].font.color.rgb = RGBColor(0x9A, 0xA3, 0xB5)
+def _short_title_label(address: str) -> str:
+    """'1200 Market Street, Austin, TX 78701' -> '1200 MARKET' -- title uses
+    street number + name only, dropping the suffix and city/state/zip
+    (matches source decks' '400 CASTRO', '2390 MISSION COLLEGE')."""
+    if address == PLACEHOLDER:
+        return "PROPERTY TBD"
+    return _strip_street_suffix(address.split(",")[0].strip()).upper()
 
 
-def _build_narrative(deal: Deal) -> str:
-    dv = deal.display_value
-
-    address = dv("address")
-    ptype = dv("property_type")
-    year_built = dv("year_built")
-    size = dv("sf_or_units")
-    submarket = dv("submarket_desc")
-    tenant_summary = dv("tenant_summary")
-    occupancy = dv("occupancy")
-    price = dv("purchase_price")
-    ppu = dv("price_per_unit")
-    cap = dv("going_in_cap")
-    exit_cap = dv("exit_cap")
-    leverage = dv("leverage")
-    debt_rate = dv("debt_rate")
-    initial_equity = dv("initial_equity")
-    peak_equity = dv("peak_equity")
-    hold = dv("hold_period")
-    unl_irr = dv("unlevered_irr")
-    lev_irr = dv("levered_irr")
-    unl_em = dv("unlevered_em")
-    lev_em = dv("levered_em")
-
-    sentences = []
-
-    sentences.append(
-        f"{address} is a {size} {ptype.lower() if ptype != PLACEHOLDER else ptype} asset "
-        f"built in {year_built}."
-    )
-    if submarket != PLACEHOLDER:
-        sentences.append(submarket)
-
-    sentences.append(
-        f"The property is {occupancy} occupied; {tenant_summary}"
-        if tenant_summary != PLACEHOLDER
-        else f"The property is {occupancy} occupied."
-    )
-
-    sentences.append(
-        f"The Sponsor is underwriting an acquisition at {price} ({ppu}), reflecting a "
-        f"{cap} going-in cap rate against a projected {exit_cap} exit cap rate at disposition."
-    )
-
-    sentences.append(
-        f"The capital structure assumes {leverage} leverage at a {debt_rate} debt rate, "
-        f"with {initial_equity} of initial equity"
-        + (f" and {peak_equity} at peak funding" if peak_equity != PLACEHOLDER else "")
-        + f" over a {hold} hold period."
-    )
-
-    sentences.append(
-        f"On this basis, the model projects a {unl_irr} unlevered IRR ({unl_em} unlevered "
-        f"equity multiple) and a {lev_irr} levered IRR ({lev_em} levered equity multiple)."
-    )
-
-    return " ".join(sentences)
-
-
-def _render_narrative_textbox(slide, narrative: str, left, top, width, height):
-    box = slide.shapes.add_textbox(left, top, width, height)
+def _add_title(slide, address: str):
+    box = slide.shapes.add_textbox(TITLE_LEFT, TITLE_TOP, Inches(10.5), TITLE_HEIGHT)
     tf = box.text_frame
-    tf.word_wrap = True
-    tf.text = ""
+    tf.margin_left = 0
+    tf.margin_top = 0
+    tf.margin_right = 0
+    tf.margin_bottom = 0
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
     p = tf.paragraphs[0]
 
-    # Split on the placeholder string so it can be styled distinctly (bold red)
-    # while everything else renders as normal body copy -- makes missing data
-    # visually obvious on the deck itself, per the "no fabrication" requirement.
-    parts = narrative.split(PLACEHOLDER)
-    for i, part in enumerate(parts):
-        if part:
-            run = p.add_run()
-            run.text = part
-            run.font.size = Pt(13)
-            run.font.name = FONT
-            run.font.color.rgb = SLATE
-        if i < len(parts) - 1:
-            run = p.add_run()
-            run.text = PLACEHOLDER
-            run.font.size = Pt(13)
-            run.font.bold = True
-            run.font.name = FONT
-            run.font.color.rgb = PLACEHOLDER_RED
+    r1 = p.add_run()
+    r1.text = "TRANSACTION SUMMARY / "
+    r1.font.size = Pt(28)
+    r1.font.bold = True
+    r1.font.name = SANS
+    r1.font.color.rgb = BLACK
+
+    r2 = p.add_run()
+    r2.text = _short_title_label(address)
+    r2.font.size = Pt(28)
+    r2.font.bold = True
+    r2.font.name = SANS
+    r2.font.color.rgb = GREEN
     return box
 
 
-def _add_kpi_strip(slide, deal: Deal, left, top, width):
-    kpis = [
-        ("Purchase Price", deal.display_value("purchase_price")),
-        ("Going-In Cap", deal.display_value("going_in_cap")),
-        ("Leverage", deal.display_value("leverage")),
-        ("Levered IRR", deal.display_value("levered_irr")),
-        ("Levered EM", deal.display_value("levered_em")),
-    ]
-    n = len(kpis)
-    cell_w = Emu(int(width / n))
-    for i, (label, value) in enumerate(kpis):
-        x = Emu(int(left) + i * int(cell_w))
-        box = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, top, cell_w - Emu(Inches(0.05)), Inches(0.95))
-        box.fill.solid()
-        box.fill.fore_color.rgb = LIGHT_GRAY
-        box.line.color.rgb = RGBColor(0xDD, 0xDE, 0xE2)
-        box.line.width = Pt(0.75)
-        box.shadow.inherit = False
-        tf = box.text_frame
-        tf.word_wrap = True
-        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-        tf.margin_left = Pt(6)
-        tf.margin_right = Pt(6)
-        p0 = tf.paragraphs[0]
-        p0.alignment = PP_ALIGN.CENTER
-        run0 = p0.add_run()
-        run0.text = value
-        run0.font.size = Pt(16)
-        run0.font.bold = True
-        run0.font.name = FONT
-        run0.font.color.rgb = PLACEHOLDER_RED if value == PLACEHOLDER else NAVY
-
-        p1 = tf.add_paragraph()
-        p1.alignment = PP_ALIGN.CENTER
-        run1 = p1.add_run()
-        run1.text = label
-        run1.font.size = Pt(9.5)
-        run1.font.name = FONT
-        run1.font.color.rgb = SLATE
+def _split_address(address: str) -> tuple[str, str]:
+    """'1200 Market Street, Austin, TX 78701' -> ('1200 Market Street', 'Austin, TX')."""
+    if address == PLACEHOLDER:
+        return address, address
+    parts = [p.strip() for p in address.split(",")]
+    street = _strip_street_suffix(parts[0]) if parts else address
+    city_state = ", ".join(parts[1:-1]) if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
+    return street, city_state
 
 
-def _add_hero_photo(slide, image_path, left, top, width, height):
-    if not image_path:
-        placeholder = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, height)
-        placeholder.fill.solid()
-        placeholder.fill.fore_color.rgb = RGBColor(0xE4, 0xE5, 0xE8)
-        placeholder.line.color.rgb = RGBColor(0xC7, 0xC9, 0xCE)
-        tf = placeholder.text_frame
-        tf.text = "No property photo extracted from OM"
-        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-        p = tf.paragraphs[0]
-        p.alignment = PP_ALIGN.CENTER
-        p.runs[0].font.italic = True
-        p.runs[0].font.color.rgb = RGBColor(0x8A, 0x8D, 0x94)
-        return
+def _build_narrative_paragraphs(deal: Deal) -> list[str]:
+    """One short paragraph per topic (property, ownership/description,
+    tenancy, pricing, business plan, capital structure, exit & returns),
+    matching the source decks' pattern of separate sentence-groups rather
+    than a single merged block."""
+    dv = deal.display_value
+    paras = []
 
-    pic = slide.shapes.add_picture(image_path, left, top, width=width, height=height)
-    # Crop to fill the frame without distortion (center-crop on the long axis).
-    native_w, native_h = pic.image.size
-    target_ratio = width / height
-    native_ratio = native_w / native_h
-    if native_ratio > target_ratio:
-        crop = (1 - target_ratio / native_ratio) / 2
-        pic.crop_left = crop
-        pic.crop_right = crop
-    else:
-        crop = (1 - native_ratio / target_ratio) / 2
-        pic.crop_top = crop
-        pic.crop_bottom = crop
+    ptype = dv("property_type")
+    ptype_phrase = ptype.lower() if ptype != PLACEHOLDER else ptype
+    article = "an" if ptype_phrase[:1].lower() in "aeiou" else "a"
+    street, city_state = _split_address(dv("address"))
+    location = f" located in {city_state}" if city_state else ""
+    paras.append(
+        f'Opportunity to acquire {street}, {article} {ptype_phrase} building totaling '
+        f'{dv("sf_or_units")}{location} (the “Investment” or the “Property”).'
+    )
+
+    year_built = dv("year_built")
+    if year_built != PLACEHOLDER:
+        paras.append(f"The Property was built in {year_built}.")
+    submarket = dv("submarket_desc")
+    if submarket != PLACEHOLDER:
+        paras.append(submarket)
+
+    tenant_summary = dv("tenant_summary")
+    occupancy = dv("occupancy")
+    walt = dv("walt")
+    tenancy_sentence = f"The Property is {occupancy} occupied"
+    if tenant_summary != PLACEHOLDER:
+        tenancy_sentence += f"; {tenant_summary}"
+    if walt != PLACEHOLDER:
+        tenancy_sentence += f", resulting in a {walt} WALT"
+    paras.append(tenancy_sentence + ".")
+
+    paras.append(
+        f'The projected purchase price for the building is {dv("purchase_price")} '
+        f'({dv("price_per_unit")}), resulting in a {dv("going_in_cap")} going-in cap rate.'
+    )
+
+    lease_term = dv("lease_term_assumption")
+    downtime = dv("downtime_assumption")
+    exit_assumption = dv("exit_assumption")
+    if any(v != PLACEHOLDER for v in (lease_term, downtime, exit_assumption)):
+        bits = []
+        if lease_term != PLACEHOLDER:
+            bits.append(f"a {lease_term} lease term")
+        if downtime != PLACEHOLDER:
+            bits.append(f"{downtime} downtime")
+        if exit_assumption != PLACEHOLDER:
+            bits.append(exit_assumption.rstrip("."))
+        paras.append("Base case business plan assumes " + "; ".join(bits) + ".")
+
+    peak_equity = dv("peak_equity")
+    debt_sentence = f'With {dv("leverage")} leverage at {dv("debt_rate")}, the initial equity is {dv("initial_equity")}'
+    if peak_equity != PLACEHOLDER:
+        debt_sentence += f" and the projected peak equity for the transaction is {peak_equity}"
+    paras.append(debt_sentence + ".")
+
+    paras.append(
+        f'Assuming the Property is sold in {dv("hold_period")} at a {dv("exit_cap")} exit cap rate, '
+        f'projected unlevered returns are {dv("unlevered_irr")} / {dv("unlevered_em")} and levered '
+        f'returns are {dv("levered_irr")} / {dv("levered_em")}.'
+    )
+
+    return paras
 
 
-def _build_slide1(prs, deal: Deal, hero_image_path):
+def _render_narrative(slide, deal: Deal, left, top, width, height):
+    box = slide.shapes.add_textbox(left, top, width, height)
+    tf = box.text_frame
+    tf.word_wrap = True
+    tf.margin_left = 0
+    tf.margin_right = 0
+
+    paragraphs = _build_narrative_paragraphs(deal)
+    first = True
+    for para_text in paragraphs:
+        p = tf.paragraphs[0] if first else tf.add_paragraph()
+        first = False
+        p.space_after = Pt(10)
+
+        # Highlight the defined terms in the opening sentence, and any
+        # placeholder text everywhere else, distinctly -- everything else is
+        # plain body copy.
+        segments = re.split(r'(“Investment”|“Property”|' + re.escape(PLACEHOLDER) + r')', para_text)
+        for seg in segments:
+            if not seg:
+                continue
+            run = p.add_run()
+            run.text = seg
+            run.font.size = Pt(12.5)
+            run.font.name = SERIF
+            if seg == PLACEHOLDER:
+                run.font.bold = True
+                run.font.color.rgb = PLACEHOLDER_RED
+            elif seg in ('“Investment”', '“Property”'):
+                run.font.color.rgb = DARK_GREEN
+            else:
+                run.font.color.rgb = BLACK
+    return box
+
+
+def _add_photos(slide, image_paths, left, top, width, height, gap=Inches(0.08)):
+    slots = 2
+    slot_h = Emu(int((int(height) - int(gap)) / slots))
+    paths = (image_paths or [None, None])[:slots]
+    while len(paths) < slots:
+        paths.append(paths[-1] if paths else None)
+
+    for i, path in enumerate(paths):
+        slot_top = Emu(int(top) + i * (int(slot_h) + int(gap)))
+        if not path:
+            placeholder = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, slot_top, width, slot_h)
+            placeholder.fill.solid()
+            placeholder.fill.fore_color.rgb = ROW_ALT
+            placeholder.line.color.rgb = BORDER_GRAY
+            tf = placeholder.text_frame
+            tf.text = "No property photo extracted from OM"
+            tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+            p = tf.paragraphs[0]
+            p.alignment = PP_ALIGN.CENTER
+            p.runs[0].font.italic = True
+            p.runs[0].font.size = Pt(10)
+            p.runs[0].font.color.rgb = GRAY_DARK
+            continue
+
+        pic = slide.shapes.add_picture(path, left, slot_top, width=width, height=slot_h)
+        native_w, native_h = pic.image.size
+        target_ratio = width / slot_h
+        native_ratio = native_w / native_h
+        if native_ratio > target_ratio:
+            crop = (1 - target_ratio / native_ratio) / 2
+            pic.crop_left = crop
+            pic.crop_right = crop
+        else:
+            crop = (1 - native_ratio / target_ratio) / 2
+            pic.crop_top = crop
+            pic.crop_bottom = crop
+
+
+def _build_slide1(prs, deal: Deal, hero_image_paths):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_header_band(slide, "Transaction Summary", deal.display_value("address"))
+    _add_title(slide, deal.display_value("address"))
 
-    photo_left, photo_top = Inches(0.45), Inches(1.35)
-    photo_w, photo_h = Inches(5.4), Inches(3.55)
-    _add_hero_photo(slide, hero_image_path, photo_left, photo_top, photo_w, photo_h)
-
-    narrative_left = Inches(6.1)
-    narrative_top = Inches(1.35)
-    narrative_w = Inches(6.8)
-    narrative_h = Inches(3.55)
-    narrative = _build_narrative(deal)
-    _render_narrative_textbox(slide, narrative, narrative_left, narrative_top, narrative_w, narrative_h)
-
-    _add_kpi_strip(slide, deal, Inches(0.45), Inches(5.15), Inches(12.44))
-
-    footer = slide.shapes.add_textbox(Inches(0.45), Inches(7.05), Inches(12.4), Inches(0.35))
-    tf = footer.text_frame
-    tf.text = "Confidential -- for internal investment committee discussion purposes only."
-    p = tf.paragraphs[0]
-    p.runs[0].font.size = Pt(9)
-    p.runs[0].font.italic = True
-    p.runs[0].font.name = FONT
-    p.runs[0].font.color.rgb = RGBColor(0x9A, 0xA3, 0xB5)
+    _add_photos(slide, hero_image_paths, Inches(0.562), Inches(1.541), Inches(4.42), Inches(5.03))
+    _render_narrative(slide, deal, Inches(5.216), Inches(1.541), Inches(7.37), Inches(5.39))
     return slide
 
 
-def _add_return_table(slide, deal: Deal, left, top, width, height):
-    rows = len(RETURN_TABLE_KEYS) + 1
-    cols = 2
-    table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
+def _panel_table(slide, deal: Deal, title, keys, left, top, width):
+    row_h = Inches(0.28)
+    header_h = Inches(0.32)
+    rows = len(keys) + 1
+
+    table_shape = slide.shapes.add_table(rows, 2, left, top, width, header_h + row_h * len(keys))
     table = table_shape.table
-    table.columns[0].width = Emu(int(width * 0.62))
-    table.columns[1].width = Emu(int(width * 0.38))
+    table.columns[0].width = Emu(int(width * 0.6))
+    table.columns[1].width = Emu(int(width * 0.4))
+    table.rows[0].height = header_h
+    for r in range(1, rows):
+        table.rows[r].height = row_h
 
-    _set_cell_text(table.cell(0, 0), "Metric", bold=True, size=12, color=WHITE, align=PP_ALIGN.LEFT)
-    _set_cell_text(table.cell(0, 1), "Value", bold=True, size=12, color=WHITE, align=PP_ALIGN.RIGHT)
-    for col in range(2):
-        cell = table.cell(0, col)
-        cell.fill.solid()
-        cell.fill.fore_color.rgb = NAVY
+    header_cell = table.cell(0, 0)
+    header_cell.merge(table.cell(0, 1))
+    header_cell.fill.solid()
+    header_cell.fill.fore_color.rgb = NAVY
+    header_cell.text = title.upper()
+    hp = header_cell.text_frame.paragraphs[0]
+    hp.alignment = PP_ALIGN.LEFT
+    hr = hp.runs[0]
+    hr.font.size = Pt(10.5)
+    hr.font.bold = True
+    hr.font.name = SANS
+    hr.font.color.rgb = WHITE
 
-    for i, key in enumerate(RETURN_TABLE_KEYS, start=1):
+    for i, key in enumerate(keys, start=1):
         label = FIELD_BY_KEY[key].label
         value = deal.display_value(key)
-        row_fill = WHITE if i % 2 else LIGHT_GRAY
-        for col, (text, align) in enumerate([(label, PP_ALIGN.LEFT), (value, PP_ALIGN.RIGHT)]):
+        row_fill = WHITE if i % 2 else ROW_ALT
+        for col, (text, align, bold) in enumerate([(label, PP_ALIGN.LEFT, False), (value, PP_ALIGN.RIGHT, True)]):
             cell = table.cell(i, col)
             cell.fill.solid()
             cell.fill.fore_color.rgb = row_fill
-            color = PLACEHOLDER_RED if text == PLACEHOLDER else SLATE
-            _set_cell_text(cell, text, bold=(col == 1), size=11, color=color, align=align)
+            cell.margin_left = Pt(6)
+            cell.margin_right = Pt(6)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            cell.text = str(text)
+            p = cell.text_frame.paragraphs[0]
+            p.alignment = align
+            run = p.runs[0]
+            run.font.size = Pt(10)
+            run.font.bold = bold
+            run.font.name = SANS
+            run.font.color.rgb = PLACEHOLDER_RED if text == PLACEHOLDER else GRAY_DARK
 
     return table_shape
 
 
-def _add_assumptions_block(slide, deal: Deal, left, top, width, height):
-    box = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, height)
-    box.fill.solid()
-    box.fill.fore_color.rgb = LIGHT_GRAY
-    box.line.color.rgb = RGBColor(0xDD, 0xDE, 0xE2)
-    box.shadow.inherit = False
-
-    tf = box.text_frame
-    tf.word_wrap = True
-    tf.margin_left = Pt(12)
-    tf.margin_right = Pt(12)
-    tf.margin_top = Pt(10)
-
-    heading = tf.paragraphs[0]
-    run = heading.add_run()
-    run.text = "Key Assumptions"
-    run.font.bold = True
-    run.font.size = Pt(13)
-    run.font.name = FONT
-    run.font.color.rgb = NAVY
-
-    rows = [
-        ("Lease Term", deal.display_value("lease_term_assumption")),
-        ("Downtime", deal.display_value("downtime_assumption")),
-        ("Exit Assumption", deal.display_value("exit_assumption")),
-    ]
-    for label, value in rows:
-        p = tf.add_paragraph()
-        p.space_before = Pt(6)
-        r1 = p.add_run()
-        r1.text = f"{label}: "
-        r1.font.bold = True
-        r1.font.size = Pt(11.5)
-        r1.font.name = FONT
-        r1.font.color.rgb = SLATE
-        r2 = p.add_run()
-        r2.text = value
-        r2.font.size = Pt(11.5)
-        r2.font.name = FONT
-        r2.font.color.rgb = PLACEHOLDER_RED if value == PLACEHOLDER else SLATE
-
-
-def _build_return_slide(prs, deal: Deal, slide_title):
+def _build_return_slide(prs, deal: Deal, address: str, case_label: str | None = None):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_header_band(slide, slide_title, deal.display_value("address"))
+    _add_title(slide, address)
 
-    _add_return_table(slide, deal, Inches(0.45), Inches(1.35), Inches(7.0), Inches(5.2))
-    _add_assumptions_block(slide, deal, Inches(7.75), Inches(1.35), Inches(5.15), Inches(5.2))
+    if case_label:
+        tag = slide.shapes.add_textbox(TITLE_LEFT, Inches(1.28), Inches(3.0), Inches(0.32))
+        tf = tag.text_frame
+        tf.margin_left = 0
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = case_label.upper()
+        run.font.size = Pt(12)
+        run.font.bold = True
+        run.font.name = SANS
+        run.font.color.rgb = GOLD
 
-    footer = slide.shapes.add_textbox(Inches(0.45), Inches(7.05), Inches(12.4), Inches(0.35))
+    panel_top = Inches(1.75)
+    panel_width = Inches(2.35)
+    gap = Inches(0.12)
+    left = TITLE_LEFT
+    for title, keys in PANELS:
+        _panel_table(slide, deal, title, keys, left, panel_top, panel_width)
+        left = Emu(int(left) + int(panel_width) + int(gap))
+
+    footer = slide.shapes.add_textbox(TITLE_LEFT, Inches(7.05), Inches(12.4), Inches(0.35))
     tf = footer.text_frame
     tf.text = "Every figure above traces to the OM, the underwriting model, or an explicit analyst input -- nothing is estimated."
     p = tf.paragraphs[0]
     p.runs[0].font.size = Pt(9)
     p.runs[0].font.italic = True
-    p.runs[0].font.name = FONT
-    p.runs[0].font.color.rgb = RGBColor(0x9A, 0xA3, 0xB5)
+    p.runs[0].font.name = SERIF
+    p.runs[0].font.color.rgb = GRAY_LIGHT
     return slide
 
 
-def build_deck(deal: Deal, hero_image_path: str | None, output_path: str, downside_deal: Deal | None = None):
+def build_deck(deal: Deal, hero_image_path, output_path: str, downside_deal: Deal | None = None):
     prs = Presentation()
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
 
-    _build_slide1(prs, deal, hero_image_path)
-    _build_return_slide(prs, deal, "Base Case Underwriting Summary")
+    hero_image_paths = hero_image_path if isinstance(hero_image_path, list) else [hero_image_path]
+    address = deal.display_value("address")
+
+    _build_slide1(prs, deal, hero_image_paths)
+    _build_return_slide(prs, deal, address, case_label="Base Case" if downside_deal is not None else None)
 
     if downside_deal is not None:
-        _build_return_slide(prs, downside_deal, "Downside Case Underwriting Summary")
+        _build_return_slide(prs, downside_deal, address, case_label="Downside Case")
 
     prs.save(output_path)
     return output_path

@@ -18,12 +18,19 @@ This can't be a single zero-dependency static HTML file -- real `.xlsx`
 parsing, PDF image extraction, and `.pptx` generation all need server-side
 libraries a sandboxed browser can't run.
 
-No reference firm deck was supplied for this build, so `pptx_builder.py`
-implements a clean, generic institutional two-pager (navy header band, gold
-accent rule, native return-summary table). If a real firm template is
-provided later, that module is the one place to reverse-engineer its exact
-fonts/colors/logo placement into -- parsing and the gap-analysis data model
-don't need to change.
+`pptx_builder.py` is reverse-engineered from two real DivcoWest ("DW")
+two-pager decks, inspected directly via python-pptx and raw theme/XML
+parsing (including decoding text out of an embedded EMF exhibit image):
+theme "DW Colors 2021" (accent green #6AA23A, navy #002554, gold #E9A800),
+"Gandhi Sans"/"Gandhi Serif" fonts, the exact title format ("TRANSACTION
+SUMMARY / {SHORT ADDRESS}" with the property name in green), the stacked
+two-photo layout, the sentence-per-topic narrative structure, and the
+five-panel return summary (Property Overview / Pricing / Debt / Equity /
+Gross Returns) that the source decks paste in as an Excel screenshot --
+rebuilt here as native, editable pptx tables instead. Line items from the
+source decks that need a granular Sources & Uses breakdown this tool
+doesn't parse (Acquisition Cost, DD/Closing Costs, Working Capital,
+Financing Cost) are intentionally left out rather than fabricated.
 
 ## Data model
 
