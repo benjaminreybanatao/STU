@@ -401,3 +401,67 @@ button:disabled { background: var(--gray-7); cursor: not-allowed; transform: non
   animation: popIn 0.4s var(--ease);
 }
 #download-link:hover { background: #223a72; transform: translateY(-2px); box-shadow: 0 6px 14px rgba(23, 40, 82, 0.35); }
+
+/* ---------- access gate ---------- */
+.app-locked { filter: blur(6px); pointer-events: none; user-select: none; }
+
+.access-gate {
+  position: fixed;
+  inset: 0;
+  background: rgba(51, 52, 47, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.access-gate.hidden { display: none; }
+.access-card {
+  background: white;
+  border-radius: 6px;
+  padding: 34px 36px;
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: popIn 0.35s var(--ease);
+}
+.access-card .logo-mark { width: 26px; margin: 0 auto 16px; }
+.access-card h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gray-11);
+  border: none;
+  padding: 0;
+}
+.access-card .hint { margin: 0 0 18px; }
+#access-form { display: flex; flex-direction: column; gap: 10px; }
+#access-code-input {
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 14px;
+  font-family: "Gandhi Serif", Georgia, serif;
+  text-align: center;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+#access-code-input:focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(106, 164, 66, 0.15);
+}
+#access-code-input.shake { animation: shakeInput 0.4s; }
+@keyframes shakeInput {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+.access-error {
+  color: var(--missing);
+  font-size: 12.5px;
+  margin: 12px 0 0;
+  font-style: italic;
+}

@@ -19,7 +19,20 @@
   <div class="topbar-accent"></div>
 </header>
 
-<main>
+<div id="access-gate" class="access-gate">
+  <div class="access-card">
+    <div class="logo-mark"><span></span><span></span><span></span><span></span></div>
+    <h2>Enter access code</h2>
+    <p class="hint">This demo can process confidential deal documents, so it's gated behind a shared access code.</p>
+    <form id="access-form">
+      <input type="password" id="access-code-input" placeholder="Access code" autocomplete="off" />
+      <button type="submit"><span class="btn-label">Continue</span></button>
+    </form>
+    <p id="access-error" class="access-error hidden">That code isn't right &mdash; try again.</p>
+  </div>
+</div>
+
+<main class="app-locked" id="app-main">
   <ol class="steps" id="steps">
     <li class="step active" data-step="1"><span class="step-dot">1</span><span class="step-label">Upload</span></li>
     <li class="step" data-step="2"><span class="step-dot">2</span><span class="step-label">Review</span></li>
