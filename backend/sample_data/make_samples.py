@@ -1,8 +1,10 @@
-"""Generates a synthetic OM PDF + underwriting model for end-to-end testing.
-Not part of the app itself -- just test fixtures."""
+"""Generates synthetic OM PDF/PPTX + underwriting model fixtures for
+end-to-end testing. Not part of the app itself -- just test fixtures."""
 import fitz
 from PIL import Image, ImageDraw
 import openpyxl
+from pptx import Presentation
+from pptx.util import Inches
 from pathlib import Path
 
 OUT = Path(__file__).parent
@@ -51,6 +53,22 @@ page2.insert_image(fitz.Rect(180, 120, 430, 370), filename=str(OUT / "floorplan.
 doc.save(OUT / "sample_om.pdf")
 doc.close()
 
+# --- Same OM content, as a PPTX (brokers send both formats) ---
+prs = Presentation()
+prs.slide_width = Inches(13.333)
+prs.slide_height = Inches(7.5)
+slide = prs.slides.add_slide(prs.slide_layouts[6])
+box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(10), Inches(3))
+box.text_frame.text = (
+    "900 Congress Avenue, Austin, TX 78701 Offering Memorandum. "
+    "900 Congress Avenue is a 210,000 square feet office building built in 2019, "
+    "located in the Austin CBD submarket, a dense urban submarket. "
+    "The property is 88% leased. Tenants include several technology tenants."
+)
+slide.shapes.add_picture(str(OUT / "hero.jpg"), Inches(0.5), Inches(4), Inches(6), Inches(3))
+slide.shapes.add_picture(str(OUT / "logo.png"), Inches(7), Inches(4), Inches(2), Inches(0.3))
+prs.save(OUT / "sample_om.pptx")
+
 # --- Underwriting model ---
 wb = openpyxl.Workbook()
 ws = wb.active
@@ -95,4 +113,4 @@ for i, (label, value) in enumerate(downside_rows, start=2):
 
 wb.save(OUT / "sample_model.xlsx")
 
-print("Wrote sample_om.pdf and sample_model.xlsx to", OUT)
+print("Wrote sample_om.pdf, sample_om.pptx, and sample_model.xlsx to", OUT)
