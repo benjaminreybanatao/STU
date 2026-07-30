@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+backend/run_data/
+.venv/
