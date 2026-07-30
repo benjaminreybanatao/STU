@@ -20,19 +20,77 @@ const GROUP_LABELS = {
   assumptions: "Assumptions",
 };
 
+// ---------- small motion helpers ----------
+
+// Reveal a card with its entrance animation. Re-triggerable: strip the
+// class first so re-showing a section (e.g. after re-analyzing) replays it.
+function revealCard(el) {
+  el.classList.remove("hidden");
+  el.classList.remove("reveal");
+  void el.offsetWidth; // force reflow so the animation restarts
+  requestAnimationFrame(() => el.classList.add("reveal"));
+}
+
+function setStep(n, { complete = [] } = {}) {
+  document.querySelectorAll("#steps .step").forEach((stepEl) => {
+    const step = Number(stepEl.dataset.step);
+    const isComplete = complete.includes(step);
+    stepEl.classList.toggle("active", step === n);
+    stepEl.classList.toggle("complete", isComplete);
+    const dot = stepEl.querySelector(".step-dot");
+    dot.textContent = isComplete ? "✓" : String(step);
+  });
+}
+
+function setButtonLoading(btn, loading, loadingText, idleText) {
+  btn.disabled = loading;
+  const label = btn.querySelector(".btn-label") || btn;
+  label.innerHTML = loading
+    ? `<span class="spinner"></span> ${loadingText}`
+    : idleText;
+}
+
+// ---------- upload dropzones (click + real drag-and-drop) ----------
+
+function wireDropzone(zoneId, inputEl, filenameId, defaultText) {
+  const zone = document.getElementById(zoneId);
+  const filenameEl = document.getElementById(filenameId);
+
+  const updateLabel = () => {
+    const file = inputEl.files[0];
+    filenameEl.textContent = file ? file.name : defaultText;
+    filenameEl.classList.toggle("has-file", !!file);
+    if (file) {
+      zone.classList.remove("flash");
+      void zone.offsetWidth;
+      zone.classList.add("flash");
+    }
+  };
+
+  inputEl.addEventListener("change", updateLabel);
+
+  ["dragenter", "dragover"].forEach((evt) =>
+    zone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      zone.classList.add("dragover");
+    })
+  );
+  ["dragleave", "dragend", "drop"].forEach((evt) =>
+    zone.addEventListener(evt, () => zone.classList.remove("dragover"))
+  );
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    inputEl.files = e.dataTransfer.files;
+    updateLabel();
+  });
+}
+
 const omFile = document.getElementById("om-file");
 const xlsxFile = document.getElementById("xlsx-file");
-
-omFile.addEventListener("change", () => {
-  const el = document.getElementById("om-filename");
-  el.textContent = omFile.files[0] ? omFile.files[0].name : "Click or drop a .pdf";
-  el.classList.toggle("has-file", !!omFile.files[0]);
-});
-xlsxFile.addEventListener("change", () => {
-  const el = document.getElementById("xlsx-filename");
-  el.textContent = xlsxFile.files[0] ? xlsxFile.files[0].name : "Click or drop a .xlsx";
-  el.classList.toggle("has-file", !!xlsxFile.files[0]);
-});
+wireDropzone("om-dropzone", omFile, "om-filename", "Click or drag a .pdf here");
+wireDropzone("xlsx-dropzone", xlsxFile, "xlsx-filename", "Click or drag a .xlsx here");
 
 document.getElementById("upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -41,8 +99,7 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
     return;
   }
   const btn = document.getElementById("analyze-btn");
-  btn.disabled = true;
-  btn.textContent = "Analyzing...";
+  setButtonLoading(btn, true, "Analyzing…", "Analyze Documents");
 
   const fd = new FormData();
   if (omFile.files[0]) fd.append("om_file", omFile.files[0]);
@@ -58,24 +115,40 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
     state.images = data.images;
     renderGapTable();
     renderImages();
-    document.getElementById("gap-section").classList.remove("hidden");
-    document.getElementById("images-section").classList.toggle("hidden", state.images.length === 0);
-    document.getElementById("generate-section").classList.remove("hidden");
+    revealCard(document.getElementById("gap-section"));
+    if (state.images.length) {
+      revealCard(document.getElementById("images-section"));
+    } else {
+      document.getElementById("images-section").classList.add("hidden");
+    }
+    revealCard(document.getElementById("generate-section"));
+    setStep(2, { complete: [1] });
   } catch (err) {
     alert("Failed to analyze documents: " + err.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = "Analyze Documents";
+    setButtonLoading(btn, false, "", "Analyze Documents");
   }
 });
 
 function renderGapTable() {
   const container = document.getElementById("gap-table");
   container.innerHTML = "";
+
+  const total = state.gapAnalysis.length;
+  const found = state.gapAnalysis.filter((rf) => rf.provenance !== "missing").length;
+  const summary = document.getElementById("gap-summary");
+  const missingCount = total - found;
+  summary.className = "gap-summary" + (missingCount > 0 ? " has-missing" : "");
+  summary.textContent =
+    missingCount === 0
+      ? `All set — every field for the two-pager was found (${found}/${total}).`
+      : `${found} of ${total} fields found automatically — ${missingCount} still need your input below.`;
+
   const groups = {};
   for (const rf of state.gapAnalysis) {
     (groups[rf.group] = groups[rf.group] || []).push(rf);
   }
+  let rowIndex = 0;
   for (const [group, rows] of Object.entries(groups)) {
     const label = document.createElement("div");
     label.className = "gap-group-label";
@@ -85,6 +158,8 @@ function renderGapTable() {
     for (const rf of rows) {
       const row = document.createElement("div");
       row.className = "gap-row";
+      row.style.animationDelay = `${Math.min(rowIndex * 25, 400)}ms`;
+      rowIndex += 1;
 
       const labelEl = document.createElement("div");
       labelEl.className = "gap-label";
@@ -112,7 +187,7 @@ function renderGapTable() {
         const input = document.createElement("input");
         input.type = "text";
         input.placeholder = `Enter ${rf.label}...`;
-        input.addEventListener("change", () => submitAnalystInput(rf.key, input.value));
+        input.addEventListener("change", () => submitAnalystInput(rf.key, input.value, input));
         inputRow.appendChild(input);
         container.appendChild(inputRow);
       }
@@ -120,7 +195,7 @@ function renderGapTable() {
   }
 }
 
-async function submitAnalystInput(key, value) {
+async function submitAnalystInput(key, value, inputEl) {
   if (!value) return;
   const res = await fetch(apiUrl(`/api/deals/${state.dealId}/analyst-inputs`), {
     method: "PATCH",
@@ -129,6 +204,7 @@ async function submitAnalystInput(key, value) {
   });
   const data = await res.json();
   state.gapAnalysis = data.gap_analysis;
+  if (inputEl) inputEl.classList.add("saved");
   renderGapTable();
 }
 
@@ -138,6 +214,7 @@ function renderImages() {
   state.images.forEach((img, idx) => {
     const tile = document.createElement("div");
     tile.className = "img-tile" + (idx === 0 ? " selected" : "");
+    tile.style.animationDelay = `${idx * 60}ms`;
     tile.innerHTML = `<img src="${apiUrl(img.url)}" /> ${idx === 0 ? '<span class="star">&#9733;</span>' : ""}`;
     tile.addEventListener("click", async () => {
       const filename = img.url.split("/").pop();
@@ -157,9 +234,9 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
   if (!state.dealId) return;
   const btn = document.getElementById("generate-btn");
   const status = document.getElementById("generate-status");
-  btn.disabled = true;
-  btn.textContent = "Generating...";
-  status.textContent = "Building deck and rendering preview -- this can take a few seconds.";
+  setButtonLoading(btn, true, "Generating…", "Generate Deck");
+  status.innerHTML = '<span class="spinner"></span> Building your deck and rendering a preview — this can take a few seconds.';
+  setStep(3, { complete: [1, 2] });
 
   try {
     const res = await fetch(apiUrl(`/api/deals/${state.dealId}/generate`), { method: "POST" });
@@ -167,12 +244,13 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
     const grid = document.getElementById("preview-grid");
     grid.innerHTML = "";
     if (data.preview_images && data.preview_images.length) {
-      data.preview_images.forEach((url) => {
+      data.preview_images.forEach((url, idx) => {
         const img = document.createElement("img");
         img.src = apiUrl(url);
+        img.style.animationDelay = `${idx * 120}ms`;
         grid.appendChild(img);
       });
-      status.textContent = "";
+      status.textContent = "Deck's ready — take a look below, or download the real .pptx.";
     } else {
       status.textContent = "Deck generated. Preview rendering unavailable in this environment (" +
         (data.preview_error || "unknown error") + ") -- download the PPTX to view it.";
@@ -180,10 +258,10 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
     const link = document.getElementById("download-link");
     link.href = apiUrl(`/api/deals/${state.dealId}/download`);
     link.classList.remove("hidden");
+    setStep(3, { complete: [1, 2, 3] });
   } catch (err) {
     status.textContent = "Failed to generate deck: " + err.message;
   } finally {
-    btn.disabled = false;
-    btn.textContent = "Generate Deck";
+    setButtonLoading(btn, false, "", "Generate Deck");
   }
 });
