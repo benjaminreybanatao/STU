@@ -1,0 +1,150 @@
+:root {
+  --navy: #142840;
+  --gold: #b88a2e;
+  --slate: #3b4454;
+  --light-gray: #f1f2f4;
+  --border: #dde0e6;
+  --found-om: #1f7a3f;
+  --found-model: #1d5da8;
+  --missing: #b02a2a;
+  --bg: #f6f7f9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Calibri, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--slate);
+}
+
+.topbar {
+  background: var(--navy);
+  color: white;
+  padding: 24px 32px;
+  border-bottom: 4px solid var(--gold);
+}
+.topbar h1 { margin: 0 0 4px; font-size: 26px; }
+.tagline { margin: 0; color: #c9cedb; font-size: 14px; }
+
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 26px;
+  margin-bottom: 22px;
+  box-shadow: 0 1px 3px rgba(20, 40, 64, 0.06);
+}
+.card h2 { margin-top: 0; color: var(--navy); font-size: 18px; }
+.hint { color: #6b7280; font-size: 13px; margin-top: -6px; }
+.hidden { display: none !important; }
+
+.drop-row { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+
+.dropzone {
+  flex: 1;
+  min-width: 240px;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 22px;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone:hover, .dropzone.dragover { border-color: var(--gold); background: #fbf7ee; }
+.dropzone input { display: none; }
+.dz-title { font-weight: 600; color: var(--navy); }
+.dz-sub { font-size: 12px; color: #8a8d94; }
+.dz-sub.has-file { color: var(--found-om); font-weight: 600; }
+
+button {
+  background: var(--navy);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 11px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { background: #1e3a5f; }
+button:disabled { background: #9aa3b5; cursor: not-allowed; }
+
+#gap-table { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; }
+.gap-group-label {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  color: var(--gold); margin: 14px 0 4px; letter-spacing: 0.04em;
+}
+.gap-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 100px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  gap: 10px;
+}
+.gap-row:nth-child(odd) { background: var(--light-gray); }
+.gap-label { font-size: 13.5px; }
+.gap-value { font-size: 13.5px; font-family: "SF Mono", Menlo, monospace; }
+.gap-value.missing { color: var(--missing); font-style: italic; }
+.badge {
+  font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 20px;
+  text-align: center; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.badge.om { background: #e6f4ea; color: var(--found-om); }
+.badge.model { background: #e7effa; color: var(--found-model); }
+.badge.missing { background: #fbe7e7; color: var(--missing); }
+.badge.analyst { background: #f2e9d8; color: var(--gold); }
+
+.missing-input-row {
+  grid-column: 1 / -1;
+  margin-top: -2px;
+  padding: 0 10px 8px;
+}
+.missing-input-row input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+#images-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.img-tile {
+  position: relative;
+  width: 160px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.img-tile.selected { border-color: var(--gold); }
+.img-tile img { width: 100%; height: 110px; object-fit: cover; display: block; }
+.img-tile .star { position: absolute; top: 4px; right: 4px; font-size: 16px; }
+
+#generate-status { margin: 14px 0; font-size: 13.5px; color: #6b7280; }
+#preview-grid { display: flex; flex-direction: column; gap: 16px; margin-top: 10px; }
+#preview-grid img { width: 100%; border: 1px solid var(--border); border-radius: 6px; }
+
+#download-link {
+  display: inline-block;
+  margin-top: 16px;
+  background: var(--gold);
+  color: white;
+  padding: 11px 22px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+}
+#download-link:hover { background: #a2791f; }

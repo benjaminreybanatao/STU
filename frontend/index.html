@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CRE Deal Screen</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1>CRE Deal Screen</h1>
+  <p class="tagline">Upload an OM + underwriting model &rarr; see what's missing &rarr; generate the two-pager.</p>
+</header>
+
+<main>
+  <section id="upload-section" class="card">
+    <h2>1. Upload deal documents</h2>
+    <form id="upload-form">
+      <div class="drop-row">
+        <label class="dropzone" for="om-file">
+          <span class="dz-title">Offering Memorandum (PDF)</span>
+          <span class="dz-sub" id="om-filename">Click or drop a .pdf</span>
+          <input type="file" id="om-file" accept="application/pdf" />
+        </label>
+        <label class="dropzone" for="xlsx-file">
+          <span class="dz-title">Underwriting Model (.xlsx)</span>
+          <span class="dz-sub" id="xlsx-filename">Click or drop a .xlsx</span>
+          <input type="file" id="xlsx-file" accept=".xlsx,.xlsm" />
+        </label>
+      </div>
+      <button type="submit" id="analyze-btn">Analyze Documents</button>
+    </form>
+  </section>
+
+  <section id="gap-section" class="card hidden">
+    <h2>2. Gap analysis</h2>
+    <p class="hint">Every field the two-pager needs, and where it came from. Fill "Missing" fields below to unblock generation.</p>
+    <div id="gap-table"></div>
+  </section>
+
+  <section id="images-section" class="card hidden">
+    <h2>Extracted photos</h2>
+    <p class="hint">Ranked by size/aspect ratio to filter out logos, charts, and floor plans. The first (starred) image is used as the slide 1 hero photo &mdash; click another to swap it.</p>
+    <div id="images-grid"></div>
+  </section>
+
+  <section id="generate-section" class="card hidden">
+    <h2>3. Generate the two-pager</h2>
+    <button id="generate-btn">Generate Deck</button>
+    <div id="generate-status"></div>
+    <div id="preview-grid"></div>
+    <a id="download-link" class="hidden" href="#">Download PPTX</a>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
