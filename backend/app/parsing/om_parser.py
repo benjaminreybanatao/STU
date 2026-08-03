@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from PIL import Image
+from PIL import Image, ImageChops
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -143,16 +143,24 @@ def _normalize_to_rgb(raw_bytes: bytes) -> Image.Image:
     fallback -- rather than passing through whatever colorspace the source
     document happened to embed.
 
-    CMYK JPEGs need no special-casing here: Pillow's JPEG decoder already
-    assumes Adobe conventions and un-inverts CMYK sample data for every
-    CMYK-mode JPEG as it decodes (see JpegImagePlugin's "CMYK;I" rawmode),
-    which covers the vast majority of real CMYK JPEGs -- Photoshop/InDesign
-    exports. A previous version of this function re-inverted the image again
-    whenever it detected an Adobe APP14 "YCCK" marker, which undid Pillow's
-    already-correct decode and rendered those photos as color negatives.
+    CMYK JPEGs always get an extra channel invert before the RGB convert.
+    Pillow's JPEG decoder unconditionally treats every CMYK-mode JPEG as
+    "Adobe inverted" and un-inverts it while decoding (see JpegImagePlugin's
+    "CMYK;I" rawmode) -- but real photography embedded in OM PDFs (Acrobat
+    Distiller/InDesign print pipelines, which is where a DeviceCMYK JPEG in a
+    PDF almost always comes from) is not actually stored that way, so
+    Pillow's blanket assumption gets it backwards and this undoes it.
+    Verified against a real OM: with no extra invert, or with one gated on
+    the JPEG APP14 marker's transform byte (a distinction that turned out not
+    to matter -- real Adobe-pipeline exports commonly use transform 0, not
+    the "documented inverted" transform 2 a previous version of this function
+    checked for), photos and aerial maps both rendered as color negatives.
     """
     img = Image.open(io.BytesIO(raw_bytes))
-    if img.mode != "RGB":
+    if img.mode == "CMYK":
+        img = ImageChops.invert(img)
+        img = img.convert("RGB")
+    elif img.mode != "RGB":
         img = img.convert("RGB")
     return img
 

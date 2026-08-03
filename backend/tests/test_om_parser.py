@@ -3,6 +3,7 @@
 Run with: python -m pytest tests/ -q     (from the backend/ directory)
 """
 import io
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -11,31 +12,35 @@ from pptx.util import Inches
 
 from app.parsing.om_parser import _extract_images_from_pptx, _normalize_to_rgb
 
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
-def test_cmyk_jpeg_is_not_double_inverted():
-    """Pillow's JPEG decoder already un-inverts CMYK sample data for every
-    CMYK-mode JPEG as it decodes (it assumes Adobe conventions unconditionally,
-    regardless of the APP14 transform byte). A previous version of
-    _normalize_to_rgb re-inverted the image again whenever it saw a "YCCK"
-    (transform == 2) marker, undoing Pillow's already-correct decode and
-    rendering the photo as a color negative -- exactly what shipped to a real
-    deck. This locks in the fix by patching a real Adobe marker's transform
-    byte to 2 and confirming the round-tripped color still matches."""
-    original = Image.new("RGB", (32, 32), (40, 120, 200))
-    buf = io.BytesIO()
-    original.convert("CMYK").save(buf, format="JPEG", quality=95)
-    raw = bytearray(buf.getvalue())
+# A 64x64 downsize of a real aerial-map photo from an actual OM PDF (a
+# DeviceCMYK JPEG, Adobe APP14 marker, transform byte 0 -- the common case for
+# a PDF produced by an Acrobat Distiller/InDesign print pipeline). Kept as a
+# real fixture rather than a synthetic Pillow-encoded CMYK JPEG on purpose:
+# Pillow's own CMYK JPEG encoder round-trips fine through Pillow's own
+# decoder, which makes a synthetic test blind to this exact bug. Real
+# Adobe-pipeline exports don't use Pillow's convention, so only real fixture
+# bytes actually exercise it.
+REAL_CMYK_SAMPLE = FIXTURES_DIR / "real_cmyk_sample.jpg"
 
-    idx = raw.find(b"Adobe")
-    assert idx != -1, "test JPEG should carry an Adobe APP14 marker"
-    raw[idx + 10] = 2  # force the "YCCK" transform byte the old code targeted
 
-    normalized = _normalize_to_rgb(bytes(raw))
+def test_real_cmyk_jpeg_is_not_a_color_negative():
+    """Pillow's JPEG decoder unconditionally treats every CMYK-mode JPEG as
+    "Adobe inverted" and un-inverts it while decoding -- but real photography
+    embedded in OM PDFs isn't actually stored that way, so a plain
+    `.convert("RGB")` renders it as a color negative (near-black here; this
+    is a green, sunlit aerial map). A previous version of this function
+    tried to detect the few cases needing correction via the JPEG APP14
+    marker's transform byte, which was backwards: this real file uses
+    transform 0, not the transform 2 that version treated as the inverted
+    case, so it was never actually corrected."""
+    normalized = _normalize_to_rgb(REAL_CMYK_SAMPLE.read_bytes())
     assert normalized.mode == "RGB"
-    r, g, b = normalized.getpixel((16, 16))
-    # JPEG is lossy, so allow some slack -- an inverted result would be off
-    # by ~255 per channel, nowhere close to this tolerance.
-    assert abs(r - 40) < 20 and abs(g - 120) < 20 and abs(b - 200) < 20
+    r, g, b = normalized.getpixel((32, 32))
+    # The broken (non-inverted) decode of this exact pixel is near-black,
+    # (24, 20, 25) -- nowhere near this range.
+    assert (r, g, b) > (60, 60, 60), f"looks like a color negative: {(r, g, b)}"
 
 
 def test_unloadable_picture_is_skipped_not_fatal(tmp_path):
