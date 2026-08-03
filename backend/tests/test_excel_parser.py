@@ -70,3 +70,25 @@ def test_no_memo_charts_sheet_falls_back_to_the_whole_workbook_scan(tmp_path):
 
     base_facts, _ = extract_facts(str(path))
     assert base_facts["total_sources"] == "$42,065,000"
+
+
+def test_long_decimals_are_rounded_for_display(tmp_path):
+    """Fields with no dedicated $/%/x formatting (WALT, hold period, lease
+    term/downtime/exit assumptions) still come straight out of a cell, which
+    can hold a formula result like 2.3333333333333335 -- a real deck's
+    narrative once read "...resulting in a 2.3333333333333335 WALT." Round to
+    something a reader would actually write by hand."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Underwriting"
+    ws["A1"] = "WALT"
+    ws["B1"] = 2.3333333333333335
+    ws["A2"] = "Hold Period"
+    ws["B2"] = 4.0
+
+    path = tmp_path / "model.xlsx"
+    wb.save(str(path))
+
+    base_facts, _ = extract_facts(str(path))
+    assert base_facts["walt"] == "2.3"
+    assert base_facts["hold_period"] == "4"

@@ -1,4 +1,4 @@
-"""Image-extraction regression coverage for the OM parser.
+"""OM parser regression coverage (text-fact extraction and image extraction).
 
 Run with: python -m pytest tests/ -q     (from the backend/ directory)
 """
@@ -10,9 +10,29 @@ from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
 
-from app.parsing.om_parser import _extract_images_from_pptx, _normalize_to_rgb
+from app.parsing.om_parser import _extract_images_from_pptx, _facts_from_text, _normalize_to_rgb
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+def test_occupancy_does_not_cross_a_line_break():
+    """A real OM PDF's text layer had "...163,545\\n% Leased\\n100%\\nWALT" --
+    a size figure ending in "545", a "% Leased" label on the next line, and
+    (elsewhere, further down) the real value in "100% occupancy". \\s* in the
+    old pattern matches newlines, so it matched "545" + the line break +
+    "% Leased" -- reporting 545% occupancy -- before .search() ever reached
+    the real, same-line match. Regression coverage using the exact text shape
+    that triggered it, not the real PDF (this is pure regex behavior)."""
+    text = (
+        "As-Leased | BOMA\n139,661 | 163,545\n% Leased\n100%\nWALT Rem. (Aug\n"
+        "flow, supported by 100% occupancy and\nover $10 million"
+    )
+    assert _facts_from_text(text).get("occupancy") == "100%"
+
+
+def test_occupancy_same_line_still_matches():
+    """The common, same-line phrasing this pattern targets must keep working."""
+    assert _facts_from_text("The Property is 97% leased as of today.").get("occupancy") == "97%"
 
 # A 64x64 downsize of a real aerial-map photo from an actual OM PDF (a
 # DeviceCMYK JPEG, Adobe APP14 marker, transform byte 0 -- the common case for

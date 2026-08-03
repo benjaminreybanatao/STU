@@ -135,6 +135,14 @@ def _normalize(key: str, raw, label: str = "") -> str | None:
         if key == "sf_or_units":
             unit = "SF" if SF_LABEL_RE.search(label) else "Units"
             return f"{raw:,.0f} {unit}"
+        if isinstance(raw, float):
+            # Fields with no dedicated formatting above (hold period, WALT,
+            # lease-term/downtime/exit assumptions) still come straight out
+            # of a cell that may hold a formula result like
+            # 4.166666666666667 -- round to something a reader would
+            # actually write by hand, dropping a trailing ".0" for whole
+            # numbers ("4" rather than "4.0").
+            return f"{round(raw, 1):g}"
         return str(raw)
     text = str(raw).strip()
     return text or None
