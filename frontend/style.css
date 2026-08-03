@@ -359,9 +359,9 @@ button:disabled { background: var(--gray-7); cursor: not-allowed; transform: non
 /* ---------- generate + preview ---------- */
 #generate-status { margin: 14px 0; font-size: 13.5px; color: var(--gray-7); font-style: italic; display: flex; align-items: center; gap: 8px; }
 #generate-status .spinner { border-color: rgba(84, 86, 91, 0.25); border-top-color: var(--gray-11); }
-#preview-grid { display: flex; flex-direction: column; gap: 16px; margin-top: 10px; }
+#preview-grid { display: flex; flex-direction: row; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
 #preview-grid img {
-  width: 100%;
+  width: 220px;
   border: 1px solid var(--border);
   border-radius: 4px;
   opacity: 0;
