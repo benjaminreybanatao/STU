@@ -237,10 +237,10 @@ async def download(deal_id: str):
         raise HTTPException(404, "Deck not generated yet -- call /generate first.")
 
     # Name the download after the property, the way the firm names these decks
-    # (e.g. "Landsby_2pager_draft.pptx"). Falls back to a generic name if the
+    # (e.g. "Landsby_2pager_v1.pptx"). Falls back to a generic name if the
     # deal is no longer in memory (the registry is per-process).
     deal = DEALS.get(deal_id)
-    filename = deck_filename(deal.display_value("address")) if deal else "Property_2pager_draft.pptx"
+    filename = deck_filename(deal.display_value("address")) if deal else "Property_2pager_v1.pptx"
 
     return FileResponse(
         str(path),

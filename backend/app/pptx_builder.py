@@ -215,8 +215,8 @@ def _short_title_label(address: str) -> str:
     return _strip_street_suffix(address.split(",")[0].strip()).upper()
 
 
-def deck_filename(address: str, suffix: str = "2pager_draft") -> str:
-    """Download name for the generated deck, e.g. "Landsby_2pager_draft.pptx".
+def deck_filename(address: str, suffix: str = "2pager_v1") -> str:
+    """Download name for the generated deck, e.g. "Landsby_2pager_v1.pptx".
 
     Built from the same short property name the slide titles use ("2390 Mission
     College" rather than the full postal address), so the file lands in the

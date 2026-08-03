@@ -45,7 +45,7 @@ Sans isn't installed and a taller fallback is substituted. The reference's
 11.2pt/14.6pt pitch is used whenever there's room for it.
 
 Downloads are named after the property, matching how the firm names these decks
-(`Landsby_2pager_draft.pptx`) -- see `pptx_builder.deck_filename`.
+(`Landsby_2pager_v1.pptx`) -- see `pptx_builder.deck_filename`.
 
 Two rules the exhibit follows:
 
