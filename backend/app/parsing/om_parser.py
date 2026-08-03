@@ -47,7 +47,11 @@ SF_RE = re.compile(
 )
 UNITS_RE = re.compile(r"([\d,]{1,5})\s*(?:units|unit count|residential units)\b", re.IGNORECASE)
 
-OCCUPANCY_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%\s*(?:leased|occupied|occupancy)", re.IGNORECASE)
+# [ \t]*, not \s* -- \s matches newlines, which let this cross a line break
+# and match the tail of an unrelated number on the line above a "% Leased"
+# label (e.g. "...163,545\n% Leased\n100%" matched as "545% Leased", not the
+# real "100%" two lines down) on a real OM PDF.
+OCCUPANCY_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)[ \t]*%[ \t]*(?:leased|occupied|occupancy)", re.IGNORECASE)
 
 PROPERTY_TYPE_KEYWORDS = {
     "multifamily": ["multifamily", "apartment", "residential units"],
