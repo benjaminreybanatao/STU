@@ -39,10 +39,30 @@ the screenshot in the sources.
 The exhibit's row height and type size are derived from the space between the
 table and the footer rather than hard-coded, because a declared row height is
 only a *minimum*: PowerPoint grows each row to fit its line and ignores
-`wrap="none"` on table cells. Sizing the rows to the available space and
-setting the type well under that keeps the table on the slide even when Gandhi
-Sans isn't installed and a taller fallback is substituted. The reference's
-11.2pt/14.6pt pitch is used whenever there's room for it.
+`wrap="none"` on table cells (it also fills in a small amount of paragraph
+spacing per line from the theme's default text style unless a cell's
+paragraph explicitly zeroes it out, which is its own source of unaccounted
+row growth). Sizing the rows to the available space and setting the type well
+under that keeps the table on the slide even when Gandhi Sans isn't installed
+and a taller fallback is substituted. The reference's 11.2pt/14.6pt pitch is
+used whenever there's room for it.
+
+"Transaction Overview" specifically renders as 3 side-by-side mini tables
+(label | value) under one shared header band, rather than one 24-row list --
+that many rows in a single table forces the type down far enough to look
+cramped, and real PowerPoint rendering (font substitution, inherited
+paragraph spacing) has less margin for error at that row count than this
+tool's own conservative checks can fully verify. 8 rows to a column instead
+of 24 to the whole table means a column has room to spare, so it's sized for
+a comfortable, legible type size instead of the smallest one that still fits.
+A row's Gross and $ Per Unit figures (where it has both) go on two stacked
+lines in the value cell rather than one combined line, and large dollar
+figures are abbreviated ("$210.6M") -- neither fits a third-width column at
+any legible size otherwise. A handful of the longer row/section labels are
+also abbreviated for this layout ("Occupancy at Exit" -> "Occ. at Exit");
+dynamic ellipsis truncation (measured, not guessed, same technique as the
+Building Name cell) is the backstop for whatever's still too long, not the
+default expectation.
 
 Downloads are named after the property, matching how the firm names these decks
 (`Landsby_2pager_v1.pptx`) -- see `pptx_builder.deck_filename`.
