@@ -40,6 +40,7 @@ this tool has no source for.
 import re
 
 from lxml import etree
+from PIL import Image, ImageDraw, ImageFont
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
@@ -231,17 +232,55 @@ def deck_filename(address: str, suffix: str = "2pager_v1") -> str:
     return f"{slug}_{suffix}.pptx"
 
 
-def _building_name(address: str) -> str:
+# Usable width of the "Building Name" value cell (col3), net of its 5pt L/R
+# margins -- text is measured against this so it can never wrap, which is
+# what pushed a whole extra row of height into the table (see _building_name).
+_BUILDING_NAME_MAX_PT = 122.0 - 2 * 5
+
+_DEJAVU_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+_TEXT_MEASURE = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+_FONT_CACHE: dict[int, "ImageFont.FreeTypeFont"] = {}
+
+
+def _text_width_pt(text: str, size_pt: float) -> float:
+    """Rendered width of `text` at `size_pt`, measured in DejaVu Sans.
+
+    DejaVu is metrically wider than Gandhi Sans (the deck's real font), so a
+    string measured to fit here has headroom to spare in the real font too.
+    """
+    scale = 10  # sub-point resolution
+    size = max(1, round(size_pt * scale))
+    font = _FONT_CACHE.get(size)
+    if font is None:
+        try:
+            font = ImageFont.truetype(_DEJAVU_PATH, size)
+        except OSError:
+            font = ImageFont.load_default()
+        _FONT_CACHE[size] = font
+    return _TEXT_MEASURE.textlength(text, font=font) / scale
+
+
+def _building_name(address: str, size_pt: float) -> str:
     """The exhibit's "Building Name" cell takes the street portion only.
 
     The reference decks put a short building name there ("Landsby",
     "Paesos at Ontario"). A full postal address is roughly twice the width of
     that column, and since these cells don't wrap it would spill across the
-    gap into the Sources & Uses table beside it.
+    gap into the Sources & Uses table beside it -- or, worse, silently wrap
+    onto a second line and grow that row, pushing the whole table past the
+    footer. Splitting on the first comma handles "Street, City, State"
+    addresses; for a bare "123 Long Street Name Boulevard" with no comma,
+    fall back to measuring the actual rendered width and truncating with an
+    ellipsis so it's guaranteed to fit on one line regardless of format.
     """
     if address == PLACEHOLDER:
         return address
-    return address.split(",")[0].strip()
+    name = address.split(",")[0].strip()
+    if _text_width_pt(name, size_pt) <= _BUILDING_NAME_MAX_PT:
+        return name
+    while name and _text_width_pt(name + "…", size_pt) > _BUILDING_NAME_MAX_PT:
+        name = name[:-1].rstrip()
+    return (name + "…") if name else address[:1]
 
 
 def _add_title(slide, address: str, prefix: str = "TRANSACTION SUMMARY / "):
@@ -671,7 +710,7 @@ def _build_txn_overview_table(slide, deal: Deal, size_pt: float, row_h: int):
             v2, ph2 = _cell_value(deal, b)
             v3, ph3 = _cell_value(deal, c)
             if c == "address" and not ph3:
-                v3 = _building_name(v3)
+                v3 = _building_name(v3, size_pt)
             _style_cell(table.cell(r, 0), a, size_pt=size_pt)
             _style_cell(table.cell(r, 1), v2, align=PP_ALIGN.CENTER, is_placeholder=ph2, size_pt=size_pt)
             _style_cell(table.cell(r, 2), v3, align=PP_ALIGN.CENTER, is_placeholder=ph3, size_pt=size_pt)

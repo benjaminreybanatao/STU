@@ -71,7 +71,12 @@ Every deal tracks three provenance buckets (`backend/app/schema.py`):
   scanning (search for a label like "Levered IRR", read the value next to
   it). This is layout-tolerant by design since every firm's model is laid
   out differently; pass an explicit `cell_map` to `excel_parser.extract_facts`
-  to pin exact cells for a known firm template instead.
+  to pin exact cells for a known firm template instead. If the workbook has
+  a tab named "Memo Charts", the exhibit's numbers are read from that sheet
+  exclusively rather than scanning the whole workbook -- it's meant to hold
+  the deck's own figures, so it's a more reliable source than an
+  underwriting tab where the same label can appear more than once or sit
+  next to an unrelated number.
 - `analyst_inputs` -- free text supplied by the user in the UI.
 
 `FIELD_REGISTRY` is the single source of truth for what the two-pager

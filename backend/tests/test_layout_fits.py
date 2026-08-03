@@ -12,6 +12,7 @@ every financial cell is a placeholder).
 
 Run with: python -m pytest tests/ -q     (from the backend/ directory)
 """
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 
 from app.pipeline import build_deal, generate_deck
+from app.schema import Deal
 
 EMU_PER_PT = 12700
 SLIDE_W_PT = 960.0
@@ -72,9 +74,7 @@ def test_all_shapes_stay_on_slide(decks, variant):
             assert bottom <= SLIDE_H_PT + 0.5, f"slide {i}: {shape.shape_type} runs off the bottom"
 
 
-@pytest.mark.parametrize("variant", ["full", "om_only"])
-def test_table_cell_text_fits_its_column(decks, variant):
-    prs = decks[variant]
+def _cell_overflows(prs) -> list[str]:
     overflows = []
     for i, slide in enumerate(prs.slides, start=1):
         for shape in slide.shapes:
@@ -97,7 +97,38 @@ def test_table_cell_text_fits_its_column(decks, variant):
                         overflows.append(
                             f"slide {i} r{r}c{c}: needs {needed:.0f}pt, has {available:.0f}pt -- {text!r}"
                         )
+    return overflows
+
+
+@pytest.mark.parametrize("variant", ["full", "om_only"])
+def test_table_cell_text_fits_its_column(decks, variant):
+    overflows = _cell_overflows(decks[variant])
     assert not overflows, "table text overflows its column:\n  " + "\n  ".join(overflows)
+
+
+def test_building_name_with_no_comma_does_not_wrap():
+    """A bare "123 Long Street Name Boulevard" address (no city/state on the
+    same field, so no comma to split on) used to pass through _building_name
+    unchanged, wrap to two lines in the narrow value column, and grow that
+    row -- pushing the whole table past the footer. Regression coverage for
+    a real deal that hit exactly this."""
+    deal = Deal()
+    deal.om_facts["address"] = "2390 Mission College Boulevard"
+    deal.model_facts.update({
+        "sf_or_units": 153549, "occupancy": 0.46, "occupancy_at_exit": 1.0, "hold_period": 4,
+        "purchase_price": 41000000, "peak_cost": 67211746, "exit_price": 46991547,
+        "going_in_cap": 0.041, "market_cap": 0.08, "exit_cap": 0.08,
+        "unlevered_irr": 0.146, "unlevered_em": 1.65, "levered_irr": 0.208, "levered_em": 1.96,
+        "leverage": 1.718, "gross_debt_proceeds": 26650000,
+        "initial_equity": 16245688, "peak_equity": 24393502,
+    })
+    deal._downside_model_facts = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "deck.pptx"
+        generate_deck(deal, str(out))
+        prs = Presentation(str(out))
+
+    assert not _cell_overflows(prs)
 
 
 @pytest.mark.parametrize("variant", ["full", "om_only"])
