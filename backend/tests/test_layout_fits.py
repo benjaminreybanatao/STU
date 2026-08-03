@@ -12,6 +12,7 @@ every financial cell is a placeholder).
 
 Run with: python -m pytest tests/ -q     (from the backend/ directory)
 """
+import itertools
 import tempfile
 from pathlib import Path
 
@@ -75,6 +76,11 @@ def test_all_shapes_stay_on_slide(decks, variant):
 
 
 def _cell_overflows(prs) -> list[str]:
+    """Each paragraph (line) in a cell is checked independently, not the
+    cell's full joined text -- the 3-column Transaction Overview layout
+    stacks a row's Gross and $ Per Unit figures as two separate lines in one
+    cell, each independently guaranteed to fit rather than a combined one
+    that couldn't."""
     overflows = []
     for i, slide in enumerate(prs.slides, start=1):
         for shape in slide.shapes:
@@ -85,18 +91,20 @@ def _cell_overflows(prs) -> list[str]:
                 for c, cell in enumerate(row.cells):
                     if getattr(cell, "is_spanned", False):
                         continue
-                    text = cell.text.strip()
-                    if not text:
-                        continue
                     span = getattr(cell, "span_width", 1)
                     available = sum(col_widths[c:c + span]) - CELL_INSET_PT
-                    runs = [run for p in cell.text_frame.paragraphs for run in p.runs if run.text]
-                    size_pt = runs[0].font.size.pt if (runs and runs[0].font.size) else 11.2
-                    needed = _text_width_pt(text, size_pt)
-                    if needed > available:
-                        overflows.append(
-                            f"slide {i} r{r}c{c}: needs {needed:.0f}pt, has {available:.0f}pt -- {text!r}"
+                    for p in cell.text_frame.paragraphs:
+                        line = "".join(run.text for run in p.runs).strip()
+                        if not line:
+                            continue
+                        size_pt = next(
+                            (run.font.size.pt for run in p.runs if run.font.size), 11.2
                         )
+                        needed = _text_width_pt(line, size_pt)
+                        if needed > available:
+                            overflows.append(
+                                f"slide {i} r{r}c{c}: needs {needed:.0f}pt, has {available:.0f}pt -- {line!r}"
+                            )
     return overflows
 
 
@@ -157,14 +165,23 @@ def test_tables_clear_the_footer_even_if_powerpoint_grows_rows(decks, variant):
             grown = 0.0
             for r, row in enumerate(table.rows):
                 declared = row.height / EMU_PER_PT
-                sizes = [
-                    run.font.size.pt
-                    for c in range(len(table.columns))
-                    for p in table.cell(r, c).text_frame.paragraphs
-                    for run in p.runs
-                    if run.font.size
-                ]
-                needed = max(sizes) * POWERPOINT_MIN_ROW_PER_PT if sizes else 0.0
+                # A cell with 2 stacked lines (the 3-column layout's Gross /
+                # $ Per Unit pair) needs roughly twice a single line's grown
+                # height, not just the bigger font -- summed within a cell
+                # (its lines stack), then the worst cell wins for the row
+                # (cells in the same row sit side by side, not stacked).
+                needed = 0.0
+                for c in range(len(table.columns)):
+                    cell = table.cell(r, c)
+                    if getattr(cell, "is_spanned", False):
+                        continue
+                    cell_needed = sum(
+                        max((run.font.size.pt for run in p.runs if run.font.size), default=0.0)
+                        * POWERPOINT_MIN_ROW_PER_PT
+                        for p in cell.text_frame.paragraphs
+                        if any(run.text.strip() for run in p.runs)
+                    )
+                    needed = max(needed, cell_needed)
                 grown += max(declared, needed)
             bottom = shape.top / EMU_PER_PT + grown
             assert bottom <= footer_top_pt, (
@@ -175,16 +192,25 @@ def test_tables_clear_the_footer_even_if_powerpoint_grows_rows(decks, variant):
 
 @pytest.mark.parametrize("variant", ["full", "om_only"])
 def test_exhibit_tables_do_not_collide(decks, variant):
-    """The two exhibit tables sit side by side with only ~9pt between them."""
+    """No two tables on the exhibit slide overlap.
+
+    The Transaction Overview header/mini tables and Sources & Uses only need
+    checking against tables they actually share vertical space with -- the
+    header spans the same x-range as its 3 mini tables below it, which is
+    fine since they're stacked, not overlapping.
+    """
     prs = decks[variant]
     for i, slide in enumerate(prs.slides, start=1):
-        tables = sorted(
-            (sh for sh in slide.shapes if sh.has_table), key=lambda sh: sh.left
-        )
-        for left_tbl, right_tbl in zip(tables, tables[1:]):
-            left_right_edge = (left_tbl.left + left_tbl.width) / EMU_PER_PT
-            right_left_edge = right_tbl.left / EMU_PER_PT
-            assert left_right_edge <= right_left_edge, (
-                f"slide {i}: exhibit tables overlap "
-                f"({left_right_edge:.1f}pt > {right_left_edge:.1f}pt)"
+        boxes = [
+            (sh.left / EMU_PER_PT, sh.top / EMU_PER_PT,
+             (sh.left + sh.width) / EMU_PER_PT, (sh.top + sh.height) / EMU_PER_PT)
+            for sh in slide.shapes if sh.has_table
+        ]
+        for (l1, t1, r1, b1), (l2, t2, r2, b2) in itertools.combinations(boxes, 2):
+            vertically_overlaps = t1 < b2 and t2 < b1
+            horizontally_overlaps = l1 < r2 and l2 < r1
+            assert not (vertically_overlaps and horizontally_overlaps), (
+                f"slide {i}: two tables overlap "
+                f"(({l1:.1f},{t1:.1f})-({r1:.1f},{b1:.1f}) vs "
+                f"({l2:.1f},{t2:.1f})-({r2:.1f},{b2:.1f}))"
             )

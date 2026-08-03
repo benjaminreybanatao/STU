@@ -121,8 +121,56 @@ ROW_FIT_SAFETY = 1.78
 # Don't let a short table balloon its rows just because there's room.
 MAX_ROW_H_PT = ROW_H_PT * 1.15
 
+# The 3-column Transaction Overview mini tables have only ~8 rows each rather
+# than the single table's 24, so MAX_ROW_H_PT (tuned for that 24-row case)
+# would cap them at the same tight row height -- wasting the extra vertical
+# room a column now has. A row can hold 2 stacked lines (see TXN_MINI_COLS
+# below), so the cap accounts for 2 lines' worth of pessimistic line-height,
+# not 1, with a little headroom on top.
+TXN_MINI_MAX_ROW_H_PT = TABLE_SIZE_PT * ROW_FIT_SAFETY * 2 * 1.05
+
+# Font size is capped independently of available vertical room (which would
+# otherwise push it to TABLE_SIZE_PT): a third-width column's label and value
+# text was measured to need something in this range to avoid truncating on
+# nearly every row -- going bigger just because there's vertical space to
+# spare makes the *horizontal* fit worse, since each character gets wider.
+TXN_MINI_FONT_CAP_PT = 9.5
+
 TXN_LEFT, TXN_WIDTH = _pt(95.4), _pt(444.2)
 TXN_COLS = (_pt(189.1), _pt(122.0), _pt(122.0), _pt(11.1))  # label, col2, col3, trailing spacer
+
+# "Transaction Overview" is laid out as 3 side-by-side mini tables (label |
+# value) under one shared header band, rather than one 24-row list in
+# TXN_COLS's proportions. 8 rows fitting a column instead of 24 rows fitting
+# the whole table means each row gets ~3x the vertical room, which is what
+# actually fixes the fit -- shrinking type further within the single-table
+# layout ran out of headroom.
+#
+# A row's Gross and $ Per Unit figures (where a row has both) go on two
+# stacked lines in the value cell rather than one combined "$41,000,000 ·
+# $264" line: even abbreviated, that combined string is wider than any
+# third-width column at a readable size, but each figure fits fine on its
+# own line -- there's ample *vertical* room in an 8-row column, just not
+# horizontal. Large dollar figures (>=$1M) are abbreviated ("$210.6M") for
+# the same reason; the full comma-grouped form doesn't fit at any legible
+# size. A handful of the longer hand-written row/section labels are also
+# abbreviated for this layout specifically (TXN_MINI_LABEL_OVERRIDES) --
+# _fit_text's ellipsis truncation is a backstop for the rare case, not
+# something this many rows should hit by design.
+TXN_COL_GAP = _pt(6.0)
+TXN_COL_WIDTH = (TXN_WIDTH - 2 * TXN_COL_GAP) // 3
+TXN_MINI_LABEL_W = int(TXN_COL_WIDTH * 0.58)
+TXN_MINI_COLS = (TXN_MINI_LABEL_W, TXN_COL_WIDTH - TXN_MINI_LABEL_W)
+
+TXN_MINI_LABEL_OVERRIDES = {
+    "Current Occupancy": "Occupancy",
+    "Occupancy at Exit": "Occ. at Exit",
+    "Projected Hold Period": "Hold Period",
+    "Units at Acquisition": "Units at Acq.",
+    "Total Square Feet": "Total SF",
+    "Exit Price (Gross)": "Exit Price",
+    "Initial Leverage (New Debt)": "Leverage",
+}
 
 SU_LEFT, SU_WIDTH = _pt(549.0), _pt(315.7)
 SU_COLS = (_pt(141.0), _pt(87.0), _pt(87.7))  # label, Total, $ Per Unit
@@ -232,10 +280,15 @@ def deck_filename(address: str, suffix: str = "2pager_v1") -> str:
     return f"{slug}_{suffix}.pptx"
 
 
-# Usable width of the "Building Name" value cell (col3), net of its 5pt L/R
-# margins -- text is measured against this so it can never wrap, which is
-# what pushed a whole extra row of height into the table (see _building_name).
-_BUILDING_NAME_MAX_PT = 122.0 - 2 * 5
+# Every table cell's left/right margin (set in _style_cell), and the total
+# horizontal inset a cell's usable text width must be measured net of.
+CELL_MARGIN_PT = 5.0
+CELL_INSET_PT = 2 * CELL_MARGIN_PT
+
+# Usable width of the "Building Name" value cell (col3) in the single-table
+# layout -- text is measured against this so it can never wrap, which is what
+# pushed a whole extra row of height into the table (see _building_name).
+_BUILDING_NAME_MAX_PT = 122.0 - CELL_INSET_PT
 
 _DEJAVU_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 _TEXT_MEASURE = ImageDraw.Draw(Image.new("RGB", (8, 8)))
@@ -260,7 +313,21 @@ def _text_width_pt(text: str, size_pt: float) -> float:
     return _TEXT_MEASURE.textlength(text, font=font) / scale
 
 
-def _building_name(address: str, size_pt: float) -> str:
+def _fit_text(text: str, size_pt: float, max_width_pt: float) -> str:
+    """Truncate `text` with an ellipsis so it's guaranteed to render on one
+    line within `max_width_pt` at `size_pt` (measured per _text_width_pt).
+    For any cell whose content isn't a short, hand-picked label -- dynamic
+    values, or a layout with narrower columns than the label text was
+    originally sized for -- so it can't silently wrap and grow its row."""
+    if not text or _text_width_pt(text, size_pt) <= max_width_pt:
+        return text
+    t = text
+    while t and _text_width_pt(t + "…", size_pt) > max_width_pt:
+        t = t[:-1].rstrip()
+    return (t + "…") if t else text[:1]
+
+
+def _building_name(address: str, size_pt: float, max_width_pt: float = _BUILDING_NAME_MAX_PT) -> str:
     """The exhibit's "Building Name" cell takes the street portion only.
 
     The reference decks put a short building name there ("Landsby",
@@ -270,17 +337,13 @@ def _building_name(address: str, size_pt: float) -> str:
     onto a second line and grow that row, pushing the whole table past the
     footer. Splitting on the first comma handles "Street, City, State"
     addresses; for a bare "123 Long Street Name Boulevard" with no comma,
-    fall back to measuring the actual rendered width and truncating with an
-    ellipsis so it's guaranteed to fit on one line regardless of format.
+    _fit_text guarantees the fallback fits on one line regardless of format.
+    `max_width_pt` defaults to the single-table column width but the 3-column
+    layout's narrower value cell passes its own.
     """
     if address == PLACEHOLDER:
         return address
-    name = address.split(",")[0].strip()
-    if _text_width_pt(name, size_pt) <= _BUILDING_NAME_MAX_PT:
-        return name
-    while name and _text_width_pt(name + "…", size_pt) > _BUILDING_NAME_MAX_PT:
-        name = name[:-1].rstrip()
-    return (name + "…") if name else address[:1]
+    return _fit_text(address.split(",")[0].strip(), size_pt, max_width_pt)
 
 
 def _add_title(slide, address: str, prefix: str = "TRANSACTION SUMMARY / "):
@@ -579,6 +642,26 @@ def _cell_value(deal: Deal, key: str | None) -> tuple[str, bool]:
     return value + VALUE_SUFFIXES.get(key, ""), False
 
 
+_CURRENCY_RE = re.compile(r"^\$([\d,]+)$")
+
+
+def _compact_currency(text: str) -> str:
+    """"$210,559,365" -> "$210.6M" -- used only in the 3-column layout's
+    narrow value cells, where a figure at this magnitude doesn't fit the
+    full comma-grouped form at any legible size. Left alone below $1M (a
+    $ Per Unit figure, say) and for anything that isn't a bare dollar amount
+    (percentages, multiples, "TBD", SF, ...)."""
+    m = _CURRENCY_RE.match(text)
+    if not m:
+        return text
+    n = int(m.group(1).replace(",", ""))
+    if abs(n) >= 1_000_000_000:
+        return f"${n / 1_000_000_000:.1f}B"
+    if abs(n) >= 1_000_000:
+        return f"${n / 1_000_000:.1f}M"
+    return text
+
+
 _BORDER_TAGS = ("a:lnL", "a:lnR", "a:lnT", "a:lnB")
 
 
@@ -596,51 +679,138 @@ def _clear_cell_borders(cell):
 
 def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fill=None,
                 is_placeholder=False, size_pt=TABLE_SIZE_PT):
-    """Write one table cell. Placeholders render red so missing data is
-    obvious on the deck itself."""
+    """Write one table cell (one line). Placeholders render red so missing
+    data is obvious on the deck itself."""
+    _style_cell_lines(cell, [(text, is_placeholder)], bold=bold, color=color, align=align,
+                       fill=fill, size_pt=size_pt)
+
+
+def _style_cell_lines(cell, lines: list[tuple[str, bool]], *, bold=False, color=BLACK,
+                       align=PP_ALIGN.LEFT, fill=None, size_pt=TABLE_SIZE_PT):
+    """Write one or more stacked lines into a table cell, each its own
+    paragraph. The 3-column Transaction Overview layout uses this for a
+    row's Gross and $ Per Unit figures: no combined single line fits a
+    third-width column, but two short lines stacked vertically do, and a
+    mini table's rows have vertical room to spare (see TXN_MINI_MAX_ROW_H_PT)."""
     if fill is not None:
         cell.fill.solid()
         cell.fill.fore_color.rgb = fill
     else:
         cell.fill.background()
     _clear_cell_borders(cell)
-    cell.margin_left = Pt(5)
-    cell.margin_right = Pt(5)
+    cell.margin_left = Pt(CELL_MARGIN_PT)
+    cell.margin_right = Pt(CELL_MARGIN_PT)
     cell.margin_top = 0
     cell.margin_bottom = 0
     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
 
     tf = cell.text_frame
     tf.word_wrap = False
-    p = tf.paragraphs[0]
-    p.alignment = align
-    # Leaving these unset means PowerPoint fills them in from the theme's
-    # default text style at render time -- which can add several points of
-    # paragraph spacing per row that our row-height safety margin (based
-    # purely on font line-height) never accounted for, on top of the font
-    # substitution it does account for. 24 rows of a few unaccounted points
-    # each is enough to visibly push the table past the footer even though
-    # every row individually looks fine. Pin all three explicitly so a row's
-    # rendered height is driven only by the font size we set.
-    p.space_before = Pt(0)
-    p.space_after = Pt(0)
-    p.line_spacing = 1.0
-    run = p.add_run()
-    run.text = str(text)
-    run.font.size = Pt(size_pt)
-    run.font.bold = bold
-    run.font.name = SANS
-    # Placeholders normally go red to flag the gap, but red on a dark band is
-    # unreadable -- there the passed-in colour (white) already stands out.
     on_dark_band = fill in (NAVY, GREEN, BLUE)
-    run.font.color.rgb = PLACEHOLDER_RED if (is_placeholder and not on_dark_band) else color
+    for i, (text, is_placeholder) in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = align
+        # Leaving these unset means PowerPoint fills them in from the
+        # theme's default text style at render time -- which can add
+        # several points of paragraph spacing per row that our row-height
+        # safety margin (based purely on font line-height) never accounted
+        # for, on top of the font substitution it does account for. 24 rows
+        # of a few unaccounted points each is enough to visibly push the
+        # table past the footer even though every row individually looks
+        # fine. Pin all three explicitly so a row's rendered height is
+        # driven only by the font size we set.
+        p.space_before = Pt(0)
+        p.space_after = Pt(0)
+        p.line_spacing = 1.0
+        run = p.add_run()
+        run.text = str(text)
+        run.font.size = Pt(size_pt)
+        run.font.bold = bold
+        run.font.name = SANS
+        # Placeholders normally go red to flag the gap, but red on a dark
+        # band is unreadable -- there the passed-in colour (white) already
+        # stands out.
+        run.font.color.rgb = PLACEHOLDER_RED if (is_placeholder and not on_dark_band) else color
 
 
-def _txn_row_count() -> int:
-    return 1 + sum(
-        (1 if title is not None else 0) + len(section_rows)
-        for title, _c2, _c3, section_rows in TXN_OVERVIEW_SECTIONS
-    )
+def _split_balanced(items: list, n: int) -> list[list]:
+    """Split `items` into `n` contiguous, size-balanced chunks (earlier
+    chunks get the extra items if it doesn't divide evenly), for tiling a
+    flat list into side-by-side columns."""
+    base, rem = divmod(len(items), n)
+    sizes = [base + 1 if i < rem else base for i in range(n)]
+    chunks = []
+    start = 0
+    for size in sizes:
+        chunks.append(items[start:start + size])
+        start += size
+    return chunks
+
+
+def _txn_mini_value(deal: Deal, c2: str | None, c3: str | None, size_pt: float,
+                     max_width_pt: float) -> list[tuple[str, bool]]:
+    """A row's value cell lines for the 3-column layout: Gross/primary (c2)
+    and $ Per Unit/secondary (c3) figures each get their own line rather
+    than combining into one -- no combined single line fits a third-width
+    column at any legible size, but each figure fits fine on its own, and a
+    mini table's rows have vertical room to spare. Falls back to one line
+    when the row only has one of the two."""
+    v2, ph2 = _cell_value(deal, c2)
+    v3, ph3 = _cell_value(deal, c3)
+    if c3 == "address" and not ph3:
+        return [(_building_name(v3, size_pt, max_width_pt=max_width_pt), ph3)]
+    lines = [(_compact_currency(v), ph) for v, ph in ((v2, ph2), (v3, ph3)) if v]
+    if not lines:
+        return [(v2, ph2)]
+    return [(_fit_text(text, size_pt, max_width_pt), ph) for text, ph in lines]
+
+
+def _build_txn_overview_table_3col(slide, deal: Deal):
+    """"Transaction Overview" as 3 side-by-side mini tables under one shared
+    header band -- see the comment on TXN_COL_GAP for why."""
+    flat_rows = []
+    for title, c2h, c3h, section_rows in TXN_OVERVIEW_SECTIONS:
+        if title is not None:
+            flat_rows.append(("section", title))
+        for label, c2, c3 in section_rows:
+            flat_rows.append(("data", label, c2, c3))
+
+    columns = _split_balanced(flat_rows, 3)
+    max_rows = max(len(c) for c in columns)
+
+    header_size_pt, header_row_h = _table_metrics(1)
+    _, header_table = _new_table(slide, TXN_LEFT, TABLE_TOP, TXN_WIDTH, (TXN_WIDTH,), 1, header_row_h)
+    _fill_header_band(header_table, 0, "Transaction Overview", 1, header_size_pt)
+
+    body_top_pt = TABLE_TOP / 12700 + header_row_h / 12700
+    size_pt, row_h = _table_metrics(max_rows, top_pt=body_top_pt, max_row_pt=TXN_MINI_MAX_ROW_H_PT)
+    size_pt = min(size_pt, TXN_MINI_FONT_CAP_PT)
+    label_w, value_w = TXN_MINI_COLS
+    label_fit_pt = label_w / 12700 - CELL_INSET_PT
+    value_fit_pt = value_w / 12700 - CELL_INSET_PT
+    section_fit_pt = TXN_COL_WIDTH / 12700 - CELL_INSET_PT
+
+    for i, column_rows in enumerate(columns):
+        left = TXN_LEFT + i * (TXN_COL_WIDTH + TXN_COL_GAP)
+        _, table = _new_table(slide, left, _pt(body_top_pt), TXN_COL_WIDTH,
+                               (label_w, value_w), len(column_rows), row_h)
+        for r, row in enumerate(column_rows):
+            if row[0] == "section":
+                _, title = row
+                for col in range(2):
+                    _style_cell(table.cell(r, col), "", fill=SECTION_GRAY, size_pt=size_pt)
+                origin = table.cell(r, 0)
+                origin.merge(table.cell(r, 1))
+                _style_cell(origin, _fit_text(title, size_pt, section_fit_pt),
+                            bold=True, fill=SECTION_GRAY, size_pt=size_pt)
+            else:
+                _, label, c2, c3 = row
+                if c3 == "sf_or_units":
+                    label = _size_row_label(deal, label)
+                label = TXN_MINI_LABEL_OVERRIDES.get(label, label)
+                lines = _txn_mini_value(deal, c2, c3, size_pt, value_fit_pt)
+                _style_cell(table.cell(r, 0), _fit_text(label, size_pt, label_fit_pt), size_pt=size_pt)
+                _style_cell_lines(table.cell(r, 1), lines, align=PP_ALIGN.CENTER, size_pt=size_pt)
 
 
 def _su_row_count() -> int:
@@ -651,8 +821,10 @@ def _su_row_count() -> int:
     )
 
 
-def _table_metrics(n_rows: int) -> tuple[float, int]:
-    """(font size in pt, row height in EMU) for a table of `n_rows` rows.
+def _table_metrics(n_rows: int, top_pt: float | None = None,
+                    max_row_pt: float = MAX_ROW_H_PT) -> tuple[float, int]:
+    """(font size in pt, row height in EMU) for a table of `n_rows` rows
+    starting at `top_pt` (defaults to the shared exhibit table top).
 
     The rows are sized to fill the space between the table top and the footer,
     so the table's total height is fixed by construction rather than by what
@@ -660,8 +832,10 @@ def _table_metrics(n_rows: int) -> tuple[float, int]:
     that height that no font substitution can push a row taller and start
     cascading the table off the slide.
     """
-    available_pt = TABLE_BOTTOM_LIMIT_PT - TABLE_TOP / 12700
-    row_pt = min(MAX_ROW_H_PT, available_pt / n_rows)
+    if top_pt is None:
+        top_pt = TABLE_TOP / 12700
+    available_pt = TABLE_BOTTOM_LIMIT_PT - top_pt
+    row_pt = min(max_row_pt, available_pt / n_rows)
     font_pt = min(TABLE_SIZE_PT, row_pt / ROW_FIT_SAFETY)
     return font_pt, _pt(row_pt)
 
@@ -691,41 +865,6 @@ def _fill_header_band(table, row: int, title: str, n_cols: int, size_pt: float):
     origin.merge(table.cell(row, n_cols - 1))
     _style_cell(origin, title, bold=True, color=WHITE, align=PP_ALIGN.CENTER, fill=NAVY,
                 size_pt=size_pt)
-
-
-def _build_txn_overview_table(slide, deal: Deal, size_pt: float, row_h: int):
-    n_cols = len(TXN_COLS)
-    rows = [("header", "Transaction Overview", None, None)]
-    for title, c2h, c3h, section_rows in TXN_OVERVIEW_SECTIONS:
-        if title is not None:
-            rows.append(("section", title, c2h, c3h))
-        for label, c2, c3 in section_rows:
-            rows.append(("data", label, c2, c3))
-
-    _, table = _new_table(slide, TXN_LEFT, TABLE_TOP, TXN_WIDTH, TXN_COLS, len(rows), row_h)
-
-    for r, (kind, a, b, c) in enumerate(rows):
-        if kind == "header":
-            _fill_header_band(table, r, a, n_cols, size_pt)
-        elif kind == "section":
-            for col in range(n_cols):
-                _style_cell(table.cell(r, col), "", fill=SECTION_GRAY, size_pt=size_pt)
-            _style_cell(table.cell(r, 0), a, bold=True, fill=SECTION_GRAY, size_pt=size_pt)
-            if b:
-                _style_cell(table.cell(r, 1), b, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY, size_pt=size_pt)
-            if c:
-                _style_cell(table.cell(r, 2), c, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY, size_pt=size_pt)
-        else:
-            if c == "sf_or_units":
-                a = _size_row_label(deal, a)
-            v2, ph2 = _cell_value(deal, b)
-            v3, ph3 = _cell_value(deal, c)
-            if c == "address" and not ph3:
-                v3 = _building_name(v3, size_pt)
-            _style_cell(table.cell(r, 0), a, size_pt=size_pt)
-            _style_cell(table.cell(r, 1), v2, align=PP_ALIGN.CENTER, is_placeholder=ph2, size_pt=size_pt)
-            _style_cell(table.cell(r, 2), v3, align=PP_ALIGN.CENTER, is_placeholder=ph3, size_pt=size_pt)
-            _style_cell(table.cell(r, 3), "", size_pt=size_pt)
 
 
 def _build_sources_uses_table(slide, deal: Deal, size_pt: float, row_h: int):
@@ -792,12 +931,13 @@ def _build_exhibit_slide(prs, deal: Deal, address: str, page_no: int, case_label
     r2.font.name = SANS
     r2.font.color.rgb = GREEN
 
-    # Both tables share one type size so they read as a pair, sized off the
-    # taller of the two so neither can run past the footer.
-    tallest = max(_txn_row_count(), _su_row_count())
-    size_pt, row_h = _table_metrics(tallest)
-    _build_txn_overview_table(slide, deal, size_pt, row_h)
-    _build_sources_uses_table(slide, deal, size_pt, row_h)
+    # Transaction Overview is sized independently now that it's 3 mini
+    # tables of ~8 rows each rather than one 24-row table -- its type would
+    # otherwise be forced down to Sources & Uses's much smaller size for no
+    # reason.
+    _build_txn_overview_table_3col(slide, deal)
+    su_size_pt, su_row_h = _table_metrics(_su_row_count())
+    _build_sources_uses_table(slide, deal, su_size_pt, su_row_h)
     return slide
 
 
