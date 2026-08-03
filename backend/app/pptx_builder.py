@@ -614,6 +614,17 @@ def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fil
     tf.word_wrap = False
     p = tf.paragraphs[0]
     p.alignment = align
+    # Leaving these unset means PowerPoint fills them in from the theme's
+    # default text style at render time -- which can add several points of
+    # paragraph spacing per row that our row-height safety margin (based
+    # purely on font line-height) never accounted for, on top of the font
+    # substitution it does account for. 24 rows of a few unaccounted points
+    # each is enough to visibly push the table past the footer even though
+    # every row individually looks fine. Pin all three explicitly so a row's
+    # rendered height is driven only by the font size we set.
+    p.space_before = Pt(0)
+    p.space_after = Pt(0)
+    p.line_spacing = 1.0
     run = p.add_run()
     run.text = str(text)
     run.font.size = Pt(size_pt)
