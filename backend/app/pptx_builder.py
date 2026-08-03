@@ -101,9 +101,17 @@ BULLET_HANG = Pt(22.6)
 
 # --- exhibit tables ---
 TABLE_TOP = _pt(120.1)
-ROW_H = _pt(14.6)
-HEADER_H = _pt(15.0)
-TABLE_SIZE = Pt(11.2)
+ROW_H_PT = 14.6          # reference row pitch
+TABLE_SIZE_PT = 11.2     # reference body size
+TABLE_BOTTOM_LIMIT_PT = 514.0 - 8.0   # keep clear of the footer
+
+# A table row's declared height is only a *minimum*: PowerPoint grows it to fit
+# the line, and it ignores wrap="none" on table cells. So the row height that
+# actually renders is driven by the font's line height, not by what we declare.
+# The factor below is measured from real PowerPoint output (11.2pt text landing
+# on a ~17.7pt row) and deliberately assumes a substituted fallback font, since
+# Gandhi Sans usually isn't installed on the viewer's machine.
+PPT_LINE_FACTOR = 1.58
 
 TXN_LEFT, TXN_WIDTH = _pt(95.4), _pt(444.2)
 TXN_COLS = (_pt(189.1), _pt(122.0), _pt(122.0), _pt(11.1))  # label, col2, col3, trailing spacer
@@ -525,7 +533,7 @@ def _clear_cell_borders(cell):
 
 
 def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fill=None,
-                is_placeholder=False):
+                is_placeholder=False, size_pt=TABLE_SIZE_PT):
     """Write one table cell. Placeholders render red so missing data is
     obvious on the deck itself."""
     if fill is not None:
@@ -546,7 +554,7 @@ def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fil
     p.alignment = align
     run = p.add_run()
     run.text = str(text)
-    run.font.size = TABLE_SIZE
+    run.font.size = Pt(size_pt)
     run.font.bold = bold
     run.font.name = SANS
     # Placeholders normally go red to flag the gap, but red on a dark band is
@@ -555,14 +563,44 @@ def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fil
     run.font.color.rgb = PLACEHOLDER_RED if (is_placeholder and not on_dark_band) else color
 
 
-def _new_table(slide, left, top, width, col_widths, n_rows):
-    shape = slide.shapes.add_table(n_rows, len(col_widths), left, top, width, Emu(int(HEADER_H) + int(ROW_H) * (n_rows - 1)))
+def _txn_row_count() -> int:
+    return 1 + sum(
+        (1 if title is not None else 0) + len(section_rows)
+        for title, _c2, _c3, section_rows in TXN_OVERVIEW_SECTIONS
+    )
+
+
+def _su_row_count() -> int:
+    # header + per block: optional spacer + subheader + its rows
+    return 1 + sum(
+        (1 if i else 0) + 1 + len(block_rows)
+        for i, (_sub, block_rows) in enumerate(SU_BLOCKS)
+    )
+
+
+def _table_metrics(n_rows: int) -> tuple[float, int]:
+    """(font size in pt, row height in EMU) for a table of `n_rows` rows.
+
+    Uses the reference pitch when it fits, and steps the type down when it
+    wouldn't. Declaring the row height at the line height PowerPoint will
+    enforce anyway makes the geometry predictable, so the table can't grow off
+    the bottom of the slide on a machine that substitutes the brand font.
+    """
+    available_pt = TABLE_BOTTOM_LIMIT_PT - TABLE_TOP / 12700
+    font_pt = min(TABLE_SIZE_PT, available_pt / (n_rows * PPT_LINE_FACTOR))
+    row_pt = max(ROW_H_PT * font_pt / TABLE_SIZE_PT, font_pt * PPT_LINE_FACTOR)
+    return font_pt, _pt(row_pt)
+
+
+def _new_table(slide, left, top, width, col_widths, n_rows, row_h):
+    shape = slide.shapes.add_table(
+        n_rows, len(col_widths), left, top, width, Emu(int(row_h) * n_rows)
+    )
     table = shape.table
     for i, cw in enumerate(col_widths):
         table.columns[i].width = cw
-    table.rows[0].height = HEADER_H
-    for r in range(1, n_rows):
-        table.rows[r].height = ROW_H
+    for r in range(n_rows):
+        table.rows[r].height = row_h
     # python-pptx tables default to a banded first-row/column style; turn the
     # theming off so our explicit fills are what actually shows.
     tbl = table._tbl.tblPr
@@ -571,16 +609,17 @@ def _new_table(slide, left, top, width, col_widths, n_rows):
     return shape, table
 
 
-def _fill_header_band(table, row: int, title: str, n_cols: int):
+def _fill_header_band(table, row: int, title: str, n_cols: int, size_pt: float):
     """Navy band spanning the table with the block title centred across it."""
     for c in range(n_cols):
-        _style_cell(table.cell(row, c), "", fill=NAVY)
+        _style_cell(table.cell(row, c), "", fill=NAVY, size_pt=size_pt)
     origin = table.cell(row, 0)
     origin.merge(table.cell(row, n_cols - 1))
-    _style_cell(origin, title, bold=True, color=WHITE, align=PP_ALIGN.CENTER, fill=NAVY)
+    _style_cell(origin, title, bold=True, color=WHITE, align=PP_ALIGN.CENTER, fill=NAVY,
+                size_pt=size_pt)
 
 
-def _build_txn_overview_table(slide, deal: Deal):
+def _build_txn_overview_table(slide, deal: Deal, size_pt: float, row_h: int):
     n_cols = len(TXN_COLS)
     rows = [("header", "Transaction Overview", None, None)]
     for title, c2h, c3h, section_rows in TXN_OVERVIEW_SECTIONS:
@@ -589,19 +628,19 @@ def _build_txn_overview_table(slide, deal: Deal):
         for label, c2, c3 in section_rows:
             rows.append(("data", label, c2, c3))
 
-    _, table = _new_table(slide, TXN_LEFT, TABLE_TOP, TXN_WIDTH, TXN_COLS, len(rows))
+    _, table = _new_table(slide, TXN_LEFT, TABLE_TOP, TXN_WIDTH, TXN_COLS, len(rows), row_h)
 
     for r, (kind, a, b, c) in enumerate(rows):
         if kind == "header":
-            _fill_header_band(table, r, a, n_cols)
+            _fill_header_band(table, r, a, n_cols, size_pt)
         elif kind == "section":
             for col in range(n_cols):
-                _style_cell(table.cell(r, col), "", fill=SECTION_GRAY)
-            _style_cell(table.cell(r, 0), a, bold=True, fill=SECTION_GRAY)
+                _style_cell(table.cell(r, col), "", fill=SECTION_GRAY, size_pt=size_pt)
+            _style_cell(table.cell(r, 0), a, bold=True, fill=SECTION_GRAY, size_pt=size_pt)
             if b:
-                _style_cell(table.cell(r, 1), b, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
+                _style_cell(table.cell(r, 1), b, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY, size_pt=size_pt)
             if c:
-                _style_cell(table.cell(r, 2), c, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
+                _style_cell(table.cell(r, 2), c, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY, size_pt=size_pt)
         else:
             if c == "sf_or_units":
                 a = _size_row_label(deal, a)
@@ -609,13 +648,13 @@ def _build_txn_overview_table(slide, deal: Deal):
             v3, ph3 = _cell_value(deal, c)
             if c == "address" and not ph3:
                 v3 = _building_name(v3)
-            _style_cell(table.cell(r, 0), a)
-            _style_cell(table.cell(r, 1), v2, align=PP_ALIGN.CENTER, is_placeholder=ph2)
-            _style_cell(table.cell(r, 2), v3, align=PP_ALIGN.CENTER, is_placeholder=ph3)
-            _style_cell(table.cell(r, 3), "")
+            _style_cell(table.cell(r, 0), a, size_pt=size_pt)
+            _style_cell(table.cell(r, 1), v2, align=PP_ALIGN.CENTER, is_placeholder=ph2, size_pt=size_pt)
+            _style_cell(table.cell(r, 2), v3, align=PP_ALIGN.CENTER, is_placeholder=ph3, size_pt=size_pt)
+            _style_cell(table.cell(r, 3), "", size_pt=size_pt)
 
 
-def _build_sources_uses_table(slide, deal: Deal):
+def _build_sources_uses_table(slide, deal: Deal, size_pt: float, row_h: int):
     n_cols = len(SU_COLS)
     rows = [("header", "Sources & Uses at Close", None, None, None)]
     for i, (subheader, block_rows) in enumerate(SU_BLOCKS):
@@ -625,31 +664,31 @@ def _build_sources_uses_table(slide, deal: Deal):
         for label, total_key, pu_key, band in block_rows:
             rows.append(("data", label, total_key, pu_key, band))
 
-    _, table = _new_table(slide, SU_LEFT, TABLE_TOP, SU_WIDTH, SU_COLS, len(rows))
+    _, table = _new_table(slide, SU_LEFT, TABLE_TOP, SU_WIDTH, SU_COLS, len(rows), row_h)
 
     for r, (kind, a, b, c, band) in enumerate(rows):
         if kind == "header":
-            _fill_header_band(table, r, a, n_cols)
+            _fill_header_band(table, r, a, n_cols, size_pt)
         elif kind == "spacer":
             for col in range(n_cols):
-                _style_cell(table.cell(r, col), "")
+                _style_cell(table.cell(r, col), "", size_pt=size_pt)
         elif kind == "section":
             for col in range(n_cols):
-                _style_cell(table.cell(r, col), "", fill=SECTION_GRAY)
-            _style_cell(table.cell(r, 0), a, bold=True, fill=SECTION_GRAY)
-            _style_cell(table.cell(r, 1), b, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
-            _style_cell(table.cell(r, 2), c, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
+                _style_cell(table.cell(r, col), "", fill=SECTION_GRAY, size_pt=size_pt)
+            _style_cell(table.cell(r, 0), a, bold=True, fill=SECTION_GRAY, size_pt=size_pt)
+            _style_cell(table.cell(r, 1), b, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY, size_pt=size_pt)
+            _style_cell(table.cell(r, 2), c, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY, size_pt=size_pt)
         else:
             fill = BAND_FILLS.get(band)
             color = WHITE if fill is not None else BLACK
             bold = fill is not None
             v1, ph1 = _cell_value(deal, b)
             v2, ph2 = _cell_value(deal, c)
-            _style_cell(table.cell(r, 0), a, bold=bold, color=color, fill=fill)
+            _style_cell(table.cell(r, 0), a, bold=bold, color=color, fill=fill, size_pt=size_pt)
             _style_cell(table.cell(r, 1), v1, bold=bold, color=color,
-                        align=PP_ALIGN.RIGHT, fill=fill, is_placeholder=ph1)
+                        align=PP_ALIGN.RIGHT, fill=fill, is_placeholder=ph1, size_pt=size_pt)
             _style_cell(table.cell(r, 2), v2, bold=bold, color=color,
-                        align=PP_ALIGN.RIGHT, fill=fill, is_placeholder=ph2)
+                        align=PP_ALIGN.RIGHT, fill=fill, is_placeholder=ph2, size_pt=size_pt)
 
 
 def _build_exhibit_slide(prs, deal: Deal, address: str, page_no: int, case_label: str | None = None):
@@ -679,8 +718,12 @@ def _build_exhibit_slide(prs, deal: Deal, address: str, page_no: int, case_label
     r2.font.name = SANS
     r2.font.color.rgb = GREEN
 
-    _build_txn_overview_table(slide, deal)
-    _build_sources_uses_table(slide, deal)
+    # Both tables share one type size so they read as a pair, sized off the
+    # taller of the two so neither can run past the footer.
+    tallest = max(_txn_row_count(), _su_row_count())
+    size_pt, row_h = _table_metrics(tallest)
+    _build_txn_overview_table(slide, deal, size_pt, row_h)
+    _build_sources_uses_table(slide, deal, size_pt, row_h)
     return slide
 
 

@@ -24,6 +24,7 @@ EMU_PER_PT = 12700
 SLIDE_W_PT = 960.0
 SLIDE_H_PT = 540.0
 CELL_INSET_PT = 10.0  # 5pt left + 5pt right, per _style_cell
+FOOTER_TOP_PT = 514.0  # measured footer baseline; tables must stay above it
 
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / "sample_data"
 
@@ -97,6 +98,47 @@ def test_table_cell_text_fits_its_column(decks, variant):
                             f"slide {i} r{r}c{c}: needs {needed:.0f}pt, has {available:.0f}pt -- {text!r}"
                         )
     assert not overflows, "table text overflows its column:\n  " + "\n  ".join(overflows)
+
+
+@pytest.mark.parametrize("variant", ["full", "om_only"])
+def test_tables_clear_the_footer_even_if_powerpoint_grows_rows(decks, variant):
+    """A declared row height is only a minimum.
+
+    PowerPoint grows each row to fit its line and ignores wrap="none" on table
+    cells, so a table sized purely on declared heights can still run off the
+    slide once the brand font is substituted. Re-check the bottom edge against
+    the height PowerPoint would actually use.
+    """
+    # Deliberately NOT imported from the builder: this is an external fact
+    # about PowerPoint, measured from real output (11.2pt text landing on a
+    # ~17.7pt row with the brand font substituted). Importing the builder's own
+    # constant would make this test merely self-consistent, and it would stop
+    # catching a regression that changed both together.
+    POWERPOINT_MIN_ROW_PER_PT = 1.58
+
+    footer_top_pt = FOOTER_TOP_PT
+    for i, slide in enumerate(decks[variant].slides, start=1):
+        for shape in slide.shapes:
+            if not shape.has_table:
+                continue
+            table = shape.table
+            grown = 0.0
+            for r, row in enumerate(table.rows):
+                declared = row.height / EMU_PER_PT
+                sizes = [
+                    run.font.size.pt
+                    for c in range(len(table.columns))
+                    for p in table.cell(r, c).text_frame.paragraphs
+                    for run in p.runs
+                    if run.font.size
+                ]
+                needed = max(sizes) * POWERPOINT_MIN_ROW_PER_PT if sizes else 0.0
+                grown += max(declared, needed)
+            bottom = shape.top / EMU_PER_PT + grown
+            assert bottom <= footer_top_pt, (
+                f"slide {i}: table would render {bottom:.1f}pt deep, "
+                f"past the footer at {footer_top_pt:.1f}pt"
+            )
 
 
 @pytest.mark.parametrize("variant", ["full", "om_only"])
