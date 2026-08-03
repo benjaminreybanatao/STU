@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .pipeline import build_deal, generate_deck
+from .pptx_builder import deck_filename
 from .preview_renderer import render_pptx_to_png
 from .schema import Deal
 
@@ -234,10 +235,17 @@ async def download(deal_id: str):
     path = _deal_work_dir(deal_id) / "offering_summary.pptx"
     if not path.exists():
         raise HTTPException(404, "Deck not generated yet -- call /generate first.")
+
+    # Name the download after the property, the way the firm names these decks
+    # (e.g. "Landsby_2pager_draft.pptx"). Falls back to a generic name if the
+    # deal is no longer in memory (the registry is per-process).
+    deal = DEALS.get(deal_id)
+    filename = deck_filename(deal.display_value("address")) if deal else "Property_2pager_draft.pptx"
+
     return FileResponse(
         str(path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename="offering_summary.pptx",
+        filename=filename,
     )
 
 

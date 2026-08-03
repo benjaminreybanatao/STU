@@ -106,12 +106,19 @@ TABLE_SIZE_PT = 11.2     # reference body size
 TABLE_BOTTOM_LIMIT_PT = 514.0 - 8.0   # keep clear of the footer
 
 # A table row's declared height is only a *minimum*: PowerPoint grows it to fit
-# the line, and it ignores wrap="none" on table cells. So the row height that
-# actually renders is driven by the font's line height, not by what we declare.
-# The factor below is measured from real PowerPoint output (11.2pt text landing
-# on a ~17.7pt row) and deliberately assumes a substituted fallback font, since
-# Gandhi Sans usually isn't installed on the viewer's machine.
-PPT_LINE_FACTOR = 1.58
+# the line, and it ignores wrap="none" on table cells. So a row only stays at
+# the height we declare if the font's line height already fits inside it.
+#
+# Rather than predict PowerPoint's line height (it depends on which font gets
+# substituted for Gandhi Sans on the viewer's machine, and an earlier estimate
+# of 1.58x was still too low in practice), the row heights are made to sum to
+# the space available and the type is then set well under that. This factor is
+# deliberately pessimistic -- larger than any real font's line height plus
+# residual cell padding -- so a row can't be forced to grow.
+ROW_FIT_SAFETY = 1.78
+
+# Don't let a short table balloon its rows just because there's room.
+MAX_ROW_H_PT = ROW_H_PT * 1.15
 
 TXN_LEFT, TXN_WIDTH = _pt(95.4), _pt(444.2)
 TXN_COLS = (_pt(189.1), _pt(122.0), _pt(122.0), _pt(11.1))  # label, col2, col3, trailing spacer
@@ -206,6 +213,22 @@ def _short_title_label(address: str) -> str:
     if address == PLACEHOLDER:
         return "PROPERTY TBD"
     return _strip_street_suffix(address.split(",")[0].strip()).upper()
+
+
+def deck_filename(address: str, suffix: str = "2pager_draft") -> str:
+    """Download name for the generated deck, e.g. "Landsby_2pager_draft.pptx".
+
+    Built from the same short property name the slide titles use ("2390 Mission
+    College" rather than the full postal address), so the file lands in the
+    analyst's downloads named the way the firm names these decks.
+    """
+    name = _short_title_label(address)
+    if name == "PROPERTY TBD":
+        name = "Property"
+    else:
+        name = name.title()
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_") or "Property"
+    return f"{slug}_{suffix}.pptx"
 
 
 def _building_name(address: str) -> str:
@@ -581,14 +604,15 @@ def _su_row_count() -> int:
 def _table_metrics(n_rows: int) -> tuple[float, int]:
     """(font size in pt, row height in EMU) for a table of `n_rows` rows.
 
-    Uses the reference pitch when it fits, and steps the type down when it
-    wouldn't. Declaring the row height at the line height PowerPoint will
-    enforce anyway makes the geometry predictable, so the table can't grow off
-    the bottom of the slide on a machine that substitutes the brand font.
+    The rows are sized to fill the space between the table top and the footer,
+    so the table's total height is fixed by construction rather than by what
+    PowerPoint decides each row needs. The type is then set far enough under
+    that height that no font substitution can push a row taller and start
+    cascading the table off the slide.
     """
     available_pt = TABLE_BOTTOM_LIMIT_PT - TABLE_TOP / 12700
-    font_pt = min(TABLE_SIZE_PT, available_pt / (n_rows * PPT_LINE_FACTOR))
-    row_pt = max(ROW_H_PT * font_pt / TABLE_SIZE_PT, font_pt * PPT_LINE_FACTOR)
+    row_pt = min(MAX_ROW_H_PT, available_pt / n_rows)
+    font_pt = min(TABLE_SIZE_PT, row_pt / ROW_FIT_SAFETY)
     return font_pt, _pt(row_pt)
 
 
