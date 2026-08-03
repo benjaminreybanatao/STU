@@ -76,30 +76,16 @@ h1, h2, h3, .sans, button, .badge, .dz-title, .gap-group-label {
   align-items: center;
   gap: 16px;
 }
-.logo-mark {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 22px;
-}
-.logo-mark span {
+/* The official DivcoWest lockup, extracted from the brand guideline PDF's
+   vector art (white-on-dark for the header, primary for the light gate card).
+   Served at 2x for crisp rendering on retina displays. */
+.logo {
   display: block;
-  height: 3px;
-  background: var(--green);
-  border-radius: 1px;
-  transform-origin: left;
-  animation: logoGrow 0.6s var(--ease) backwards;
+  height: 22px;
+  width: auto;
+  flex-shrink: 0;
+  animation: fadeSlideUp 0.5s var(--ease) backwards;
 }
-@keyframes logoGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-/* The real DW mark is equal-width bars whose thickness increases downward
-   (measured off the reference decks), not tapering widths. */
-.logo-mark span:nth-child(1) { height: 1px; animation-delay: 0.05s; }
-.logo-mark span:nth-child(2) { height: 2px; animation-delay: 0.12s; }
-.logo-mark span:nth-child(3) { height: 3px; animation-delay: 0.19s; }
-.logo-mark span:nth-child(4) { height: 5px; animation-delay: 0.26s; }
-.logo-word { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
-.logo-word b { color: white; }
-.logo-word span { color: #c7c9cb; font-weight: 400; }
 .topbar-title { border-left: 1px solid rgba(255,255,255,0.25); padding-left: 16px; }
 .topbar h1 {
   margin: 0 0 2px;
@@ -429,7 +415,7 @@ button:disabled { background: var(--gray-7); cursor: not-allowed; transform: non
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   animation: popIn 0.35s var(--ease);
 }
-.access-card .logo-mark { width: 26px; margin: 0 auto 16px; }
+.access-logo { height: 20px; margin: 0 auto 18px; }
 .access-card h2 {
   margin: 0 0 8px;
   font-size: 15px;
