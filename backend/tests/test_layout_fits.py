@@ -110,11 +110,12 @@ def test_tables_clear_the_footer_even_if_powerpoint_grows_rows(decks, variant):
     the height PowerPoint would actually use.
     """
     # Deliberately NOT imported from the builder: this is an external fact
-    # about PowerPoint, measured from real output (11.2pt text landing on a
-    # ~17.7pt row with the brand font substituted). Importing the builder's own
-    # constant would make this test merely self-consistent, and it would stop
-    # catching a regression that changed both together.
-    POWERPOINT_MIN_ROW_PER_PT = 1.58
+    # about PowerPoint. 1.58 was measured from real output (11.2pt text on a
+    # ~17.7pt row with the brand font substituted) and still proved too low, so
+    # this asserts the stronger margin the builder now designs for. Importing
+    # the builder's own constant would make the test merely self-consistent and
+    # would stop catching a regression that changed both together.
+    POWERPOINT_MIN_ROW_PER_PT = 1.78
 
     footer_top_pt = FOOTER_TOP_PT
     for i, slide in enumerate(decks[variant].slides, start=1):

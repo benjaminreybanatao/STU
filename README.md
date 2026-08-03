@@ -36,6 +36,17 @@ navy header bands, grey section headers, green total rows and a blue subtotal
 row. Both are rebuilt as native pptx tables so the deck stays editable, unlike
 the screenshot in the sources.
 
+The exhibit's row height and type size are derived from the space between the
+table and the footer rather than hard-coded, because a declared row height is
+only a *minimum*: PowerPoint grows each row to fit its line and ignores
+`wrap="none"` on table cells. Sizing the rows to the available space and
+setting the type well under that keeps the table on the slide even when Gandhi
+Sans isn't installed and a taller fallback is substituted. The reference's
+11.2pt/14.6pt pitch is used whenever there's room for it.
+
+Downloads are named after the property, matching how the firm names these decks
+(`Landsby_2pager_v1.pptx`) -- see `pptx_builder.deck_filename`.
+
 Two rules the exhibit follows:
 
 - **`$ Per Unit` is never computed.** Per-unit figures are read only from a
