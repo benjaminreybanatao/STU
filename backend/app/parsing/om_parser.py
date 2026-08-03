@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from PIL import Image, ImageChops
+from PIL import Image
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -136,33 +136,23 @@ def extract_facts(om_path: str) -> dict:
     return _facts_from_text(full_text)
 
 
-def _is_adobe_inverted_cmyk(raw_bytes: bytes) -> bool:
-    """Some Adobe-pipeline JPEGs (Photoshop/InDesign "YCCK" exports) store
-    CMYK channel-inverted, which makes naive CMYK->RGB conversion produce
-    wrong colors. The JPEG APP14 marker's transform byte -- not just the
-    presence of the "Adobe" string, which Pillow's own CMYK encoder also
-    writes without inverting -- distinguishes the two: transform == 2
-    (YCCK) is the documented inverted case; transform == 0 (plain CMYK,
-    e.g. Pillow's own output) is not."""
-    idx = raw_bytes.find(b"Adobe")
-    if idx == -1 or idx + 11 > len(raw_bytes):
-        return False
-    transform_byte = raw_bytes[idx + 10]
-    return transform_byte == 2
-
-
 def _normalize_to_rgb(raw_bytes: bytes) -> Image.Image:
     """Normalize every extracted image to plain RGB regardless of source
     colorspace (CMYK, grayscale, palette, etc.), so color rendering is
     consistent across PowerPoint, browsers, and the Pillow preview
     fallback -- rather than passing through whatever colorspace the source
-    document happened to embed."""
+    document happened to embed.
+
+    CMYK JPEGs need no special-casing here: Pillow's JPEG decoder already
+    assumes Adobe conventions and un-inverts CMYK sample data for every
+    CMYK-mode JPEG as it decodes (see JpegImagePlugin's "CMYK;I" rawmode),
+    which covers the vast majority of real CMYK JPEGs -- Photoshop/InDesign
+    exports. A previous version of this function re-inverted the image again
+    whenever it detected an Adobe APP14 "YCCK" marker, which undid Pillow's
+    already-correct decode and rendered those photos as color negatives.
+    """
     img = Image.open(io.BytesIO(raw_bytes))
-    if img.mode == "CMYK":
-        if _is_adobe_inverted_cmyk(raw_bytes):
-            img = ImageChops.invert(img)
-        img = img.convert("RGB")
-    elif img.mode != "RGB":
+    if img.mode != "RGB":
         img = img.convert("RGB")
     return img
 
@@ -194,13 +184,18 @@ def _extract_images_from_pdf(pdf_path: str, out_dir: str) -> list[dict]:
             width, height = base_image.get("width", 0), base_image.get("height", 0)
             if _is_logo_or_chart(width, height):
                 continue
-            try:
-                normalized = _normalize_to_rgb(base_image["image"])
-            except Exception:
-                continue
             filename = f"page{page_index + 1}_el{xref}.png"
             out_path = str(Path(out_dir) / filename)
-            normalized.save(out_path)
+            try:
+                normalized = _normalize_to_rgb(base_image["image"])
+                normalized.save(out_path)
+            except Exception:
+                # A handful of embedded pictures decode to a format Pillow's
+                # lazy loader can't actually render (e.g. a WMF vector image
+                # PyMuPDF reports as a raster) -- the failure only surfaces
+                # on save(), not on open(). Skip that one picture rather than
+                # letting it take down extraction for the whole document.
+                continue
             candidates.append(
                 {
                     "path": out_path,
@@ -231,13 +226,19 @@ def _extract_images_from_pptx(pptx_path: str, out_dir: str) -> list[dict]:
                 continue
             if _is_logo_or_chart(width, height):
                 continue
-            try:
-                normalized = _normalize_to_rgb(image.blob)
-            except Exception:
-                continue
             filename = f"slide{slide_index + 1}_el{shape_index}.png"
             out_path = str(Path(out_dir) / filename)
-            normalized.save(out_path)
+            try:
+                normalized = _normalize_to_rgb(image.blob)
+                normalized.save(out_path)
+            except Exception:
+                # A handful of embedded pictures decode to a format Pillow's
+                # lazy loader can't actually render (e.g. a WMF vector image
+                # python-pptx reports as a raster) -- the failure only
+                # surfaces on save(), not on open(). Skip that one picture
+                # rather than letting it take down extraction for the whole
+                # deck.
+                continue
             candidates.append(
                 {
                     "path": out_path,
