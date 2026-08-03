@@ -37,6 +37,8 @@ def downside_variant(deal: Deal) -> Deal | None:
 
 
 def generate_deck(deal: Deal, output_path: str) -> str:
-    hero_images = [img["path"] for img in deal.om_images[:2]]
+    # The first two feed slide 1's stacked pair; the rest are candidates for
+    # the Asset Photos grid, which the builder adds when there are 3+.
+    images = [img["path"] for img in deal.om_images[:8]]
     downside = downside_variant(deal)
-    return build_deck(deal, hero_images, output_path, downside_deal=downside)
+    return build_deck(deal, images, output_path, downside_deal=downside)

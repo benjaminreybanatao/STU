@@ -25,36 +25,79 @@ import openpyxl
 
 LABEL_PATTERNS: dict[str, list[str]] = {
     "purchase_price": [r"purchase price", r"acquisition price", r"total purchase price"],
-    "price_per_unit": [r"price\s*/\s*unit", r"price\s*per\s*unit", r"price\s*/\s*sf", r"price\s*per\s*sf"],
+    "purchase_price_per_unit": [r"price\s*/\s*unit", r"price\s*per\s*unit", r"price\s*/\s*sf", r"price\s*per\s*sf"],
+    "peak_cost": [r"peak cost", r"peak basis"],
+    "exit_price": [r"exit price", r"gross sale price", r"disposition price"],
     "going_in_cap": [r"going[- ]in cap", r"entry cap rate", r"year 1 cap rate", r"purchase cap rate"],
+    "market_cap": [r"market cap rate", r"cap (?:rate )?on market", r"yield on market"],
     "exit_cap": [r"exit cap", r"terminal cap", r"reversion cap"],
     "leverage": [r"leverage", r"ltv", r"loan[- ]to[- ]value"],
     "debt_rate": [r"interest rate", r"debt rate", r"spread", r"coupon"],
+    "gross_debt_proceeds": [r"gross debt proceeds", r"debt proceeds", r"loan amount"],
     "initial_equity": [r"initial equity", r"equity required", r"total equity invested"],
     "peak_equity": [r"peak equity", r"max(?:imum)? equity"],
     "hold_period": [r"hold period", r"holding period", r"investment period"],
     "unlevered_irr": [r"unlevered irr", r"unleveraged\.? irr"],
     "levered_irr": [r"(?<!un)levered irr", r"(?<!un)leveraged\.? irr"],
-    "unlevered_em": [r"unlevered equity multiple", r"unlevered em\b"],
-    "levered_em": [r"(?<!un)levered equity multiple", r"(?<!un)levered em\b"],
+    "unlevered_em": [r"unlevered equity multiple", r"unlevered em\b", r"unlevered cfx"],
+    "levered_em": [r"(?<!un)levered equity multiple", r"(?<!un)levered em\b", r"(?<!un)levered cfx"],
     "cash_on_cash": [r"cash[- ]on[- ]cash", r"\bcoc\b"],
-    "sf_or_units": [r"total (?:rentable )?(?:square feet|sf|rsf)", r"unit count", r"number of units"],
-    "occupancy": [r"occupancy", r"leased %", r"% leased"],
+    "sf_or_units": [r"total (?:rentable )?(?:square feet|sf|rsf)", r"unit count", r"number of units",
+                    r"units at acquisition"],
+    "occupancy": [r"current occupancy", r"^occupancy$", r"leased %", r"% leased"],
+    "occupancy_at_exit": [r"occupancy at exit", r"exit occupancy"],
     "walt": [r"walt", r"weighted average lease term"],
+    # --- Sources & Uses at Close ---
+    "total_sources": [r"total sources"],
+    "dd_closing_costs": [r"dd\s*/?\s*closing costs", r"closing costs", r"due diligence costs"],
+    "working_capital": [r"working capital"],
+    "equity_subtotal": [r"equity subtotal"],
+    "financing_cost": [r"financing cost", r"loan fees?"],
+    "total_uses": [r"total uses"],
+    # --- Assumptions ---
     "lease_term_assumption": [r"lease term assumption", r"average lease term"],
     "downtime_assumption": [r"downtime assumption", r"months? vacant", r"downtime \(months\)"],
     "exit_assumption": [r"exit assumption", r"sale assumption", r"disposition assumption"],
 }
 
 DOWNSIDE_SHEET_RE = re.compile(r"downside|bear|stress|sensitivity", re.IGNORECASE)
-BASE_SHEET_RE = re.compile(r"base\s*case|upside|primary", re.IGNORECASE)
 
-PERCENT_KEYS = {"going_in_cap", "exit_cap", "leverage", "debt_rate", "unlevered_irr", "levered_irr", "cash_on_cash", "occupancy"}
-CURRENCY_KEYS = {"purchase_price", "price_per_unit", "initial_equity", "peak_equity"}
+# A "$ Per Unit" / "$ PSF" column header in the model. When present, each
+# labelled row's value is also read from that column into "{key}_per_unit", so
+# per-unit figures on the deck always come from a cell the model actually
+# states -- they are never derived by dividing by a unit count.
+PER_UNIT_HEADER_RE = re.compile(r"\$?\s*per\s*(?:unit|sf)\b|\bpsf\b|\$\s*/\s*(?:unit|sf)\b", re.IGNORECASE)
+
+# Keys whose per-unit companion the exhibit tables display.
+PER_UNIT_KEYS = {
+    "purchase_price", "peak_cost", "exit_price", "initial_equity", "peak_equity",
+    "gross_debt_proceeds", "dd_closing_costs", "working_capital", "equity_subtotal",
+    "financing_cost", "total_sources", "total_uses",
+}
+
+PERCENT_KEYS = {
+    "going_in_cap", "market_cap", "exit_cap", "leverage", "debt_rate",
+    "unlevered_irr", "levered_irr", "cash_on_cash", "occupancy", "occupancy_at_exit",
+}
+CURRENCY_KEYS = {
+    "purchase_price", "purchase_price_per_unit", "peak_cost", "exit_price",
+    "gross_debt_proceeds", "initial_equity", "peak_equity",
+    "total_sources", "dd_closing_costs", "working_capital", "equity_subtotal",
+    "financing_cost", "total_uses",
+} | {f"{k}_per_unit" for k in PER_UNIT_KEYS}
 MULTIPLE_KEYS = {"unlevered_em", "levered_em"}
 
 
-def _normalize(key: str, raw) -> str | None:
+SF_LABEL_RE = re.compile(r"square feet|\bsf\b|\brsf\b|\bpsf\b", re.IGNORECASE)
+
+
+def _normalize(key: str, raw, label: str = "") -> str | None:
+    """Format a raw cell value for display.
+
+    `label` is the model's own row label, used only where the same field can
+    mean different things depending on how it was written (a size row is
+    square feet or unit count depending on its wording).
+    """
     if raw is None or raw == "":
         return None
     if isinstance(raw, datetime):
@@ -63,11 +106,16 @@ def _normalize(key: str, raw) -> str | None:
         if key in PERCENT_KEYS:
             # Excel stores 8% as 0.08; also tolerate models that store "8" literally.
             value = raw * 100 if abs(raw) <= 1 else raw
-            return f"{value:.1f}%"
+            # Trim a pointless trailing zero so occupancy reads "97%" while a
+            # cap rate still reads "5.1%", matching the reference decks.
+            return f"{value:.1f}%".replace(".0%", "%")
         if key in CURRENCY_KEYS:
             return f"${raw:,.0f}"
         if key in MULTIPLE_KEYS:
             return f"{raw:.2f}x"
+        if key == "sf_or_units":
+            unit = "SF" if SF_LABEL_RE.search(label) else "Units"
+            return f"{raw:,.0f} {unit}"
         return str(raw)
     text = str(raw).strip()
     return text or None
@@ -77,10 +125,81 @@ def _compiled_patterns() -> dict[str, list[re.Pattern]]:
     return {key: [re.compile(p, re.IGNORECASE) for p in pats] for key, pats in LABEL_PATTERNS.items()}
 
 
+# Column headers and section captions that sit between a row label and its
+# value in real firm layouts. Never a value.
+COLUMN_HEADER_RE = re.compile(
+    r"^(?:gross|total|net|\$\s*per\s*unit|\$\s*psf|per\s*unit|psf|value|annual rent|"
+    r"pricing|cap rate|gross returns|debt|equity|sources? & uses.*|transaction overview)$",
+    re.IGNORECASE,
+)
+
+NUMERIC_KEYS = PERCENT_KEYS | CURRENCY_KEYS | MULTIPLE_KEYS
+
+# How far right of a label to look for its value. Firm models put single
+# values several columns over (e.g. label in col A, value in col C).
+VALUE_SCAN_COLS = 6
+
+
+def _is_label_like(text: str, patterns: dict[str, list[re.Pattern]]) -> bool:
+    """True if a candidate cell is really another row label or a column header.
+
+    Without this, a label whose own value cell is empty would swallow the next
+    label as its value -- e.g. "Year 1 Cap Rate" picking up the text
+    "Market Cap Rate" from the row below.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if COLUMN_HEADER_RE.match(stripped) or PER_UNIT_HEADER_RE.search(stripped):
+        return True
+    return any(r.search(stripped) for regs in patterns.values() for r in regs)
+
+
+def _pick_value(ws, row: int, col: int, key: str, patterns: dict[str, list[re.Pattern]]):
+    """Find the value belonging to a label at (row, col).
+
+    Scans rightward along the row first (the dominant layout), then tries the
+    cell directly below for vertically-stacked label/value pairs. Numeric
+    fields only accept genuinely numeric cells, which keeps stray text out of
+    money and percentage columns.
+    """
+    numeric_only = key in NUMERIC_KEYS
+
+    candidates = [ws.cell(row=row, column=c).value for c in range(col + 1, col + 1 + VALUE_SCAN_COLS)]
+    candidates.append(ws.cell(row=row + 1, column=col).value)
+
+    for raw in candidates:
+        if raw is None or raw == "":
+            continue
+        if isinstance(raw, str):
+            if numeric_only or _is_label_like(raw, patterns):
+                continue
+        return raw
+    return None
+
+
+def _find_per_unit_columns(ws, max_row: int, max_col: int) -> list[int]:
+    """Column indices of any "$ Per Unit" / "$ PSF" header cells in the sheet.
+
+    Returned in left-to-right order. A model can have several (one per table
+    block), so a labelled row reads whichever of them holds a value.
+    """
+    cols: list[int] = []
+    for row in range(1, max_row + 1):
+        for col in range(1, max_col + 1):
+            value = ws.cell(row=row, column=col).value
+            if isinstance(value, str) and PER_UNIT_HEADER_RE.search(value.strip()):
+                if col not in cols:
+                    cols.append(col)
+    return sorted(cols)
+
+
 def _scan_sheet(ws, patterns: dict[str, list[re.Pattern]]) -> dict:
     found: dict = {}
     max_row = min(ws.max_row, 500)
     max_col = min(ws.max_column, 60)
+    per_unit_cols = _find_per_unit_columns(ws, max_row, max_col)
+
     for row in range(1, max_row + 1):
         for col in range(1, max_col + 1):
             cell = ws.cell(row=row, column=col)
@@ -93,12 +212,24 @@ def _scan_sheet(ws, patterns: dict[str, list[re.Pattern]]) -> dict:
                 if key in found:
                     continue
                 if any(r.search(label) for r in regs):
-                    value = ws.cell(row=row, column=col + 1).value
-                    if value in (None, ""):
-                        value = ws.cell(row=row + 1, column=col).value
-                    normalized = _normalize(key, value)
+                    normalized = _normalize(key, _pick_value(ws, row, col, key, patterns), label)
                     if normalized is not None:
                         found[key] = normalized
+
+                    # Pick up the row's explicitly-stated per-unit figure, if the
+                    # sheet has a per-unit column to the right of this label.
+                    pu_key = f"{key}_per_unit"
+                    if key in PER_UNIT_KEYS and pu_key not in found:
+                        for pu_col in per_unit_cols:
+                            if pu_col <= col:
+                                continue
+                            raw = ws.cell(row=row, column=pu_col).value
+                            if not isinstance(raw, (int, float)):
+                                continue
+                            pu_normalized = _normalize(pu_key, raw)
+                            if pu_normalized is not None:
+                                found[pu_key] = pu_normalized
+                                break
     return found
 
 

@@ -70,46 +70,96 @@ slide.shapes.add_picture(str(OUT / "logo.png"), Inches(7), Inches(4), Inches(2),
 prs.save(OUT / "sample_om.pptx")
 
 # --- Underwriting model ---
+# Laid out the way the real firm models are: a label column, a "Gross" column
+# and an explicit "$ Per Unit" column, plus a Sources & Uses block off to the
+# right. The parser reads per-unit figures only from that stated column -- it
+# never derives them -- so the fixture needs them present to exercise it.
 wb = openpyxl.Workbook()
 ws = wb.active
 ws.title = "Base Case"
 
+# The OM fixture is a 145,000 SF office deal, so the model states figures
+# per square foot. "$ Per Unit" is just the column's heading in these models.
+SF = 145_000
+
 rows = [
-    ("Purchase Price", 42_500_000),
-    ("Total Purchase Price", 42_500_000),
-    ("Price / SF", 293.10),
-    ("Going-In Cap Rate", 0.0525),
-    ("Exit Cap Rate", 0.0575),
-    ("Leverage", 0.60),
-    ("Interest Rate", 0.055),
-    ("Initial Equity", 17_000_000),
-    ("Peak Equity", 17_850_000),
-    ("Hold Period", 5),
-    ("Unlevered IRR", 0.079),
-    ("Levered IRR", 0.134),
-    ("Unlevered Equity Multiple", 1.42),
-    ("Levered Equity Multiple", 1.71),
-    ("Cash-on-Cash", 0.061),
-    ("Lease Term Assumption", "10-year weighted average"),
-    ("Downtime Assumption", "9 months between leases"),
-    ("Exit Assumption", "Sale in Year 5 at stabilized NOI"),
+    # (label, gross, per-unit)
+    ("Building Name", "1200 Market Street", None),
+    ("Total Square Feet", SF, None),
+    ("Current Occupancy", 0.94, None),
+    ("Occupancy at Exit", 1.00, None),
+    ("Projected Hold Period", "5 Years", None),
+    ("Pricing", "Gross", "$ Per Unit"),
+    ("Purchase Price", 42_500_000, 293),
+    ("Peak Cost", 44_100_000, 304),
+    ("Exit Price (Gross)", 57_800_000, 399),
+    ("Cap Rate", None, None),
+    ("Going-In Cap Rate", None, 0.0525),
+    ("Market Cap Rate", None, 0.0560),
+    ("Exit Cap Rate", None, 0.0575),
+    ("Gross Returns", None, None),
+    ("Unlevered IRR", None, 0.079),
+    ("Unlevered Equity Multiple", None, 1.42),
+    ("Levered IRR", None, 0.134),
+    ("Levered Equity Multiple", None, 1.71),
+    ("Cash-on-Cash", None, 0.061),
+    ("Debt", "Gross", None),
+    ("Leverage", 0.60, 25_500_000),
+    ("Interest Rate", 0.055, None),
+    ("Equity", "Gross", "$ Per Unit"),
+    ("Initial Equity", 17_000_000, 117),
+    ("Peak Equity", 17_850_000, 123),
+    ("Lease Term Assumption", "10-year weighted average", None),
+    ("Downtime Assumption", "9 months between leases", None),
+    ("Exit Assumption", "Sale in Year 5 at stabilized NOI", None),
 ]
-for i, (label, value) in enumerate(rows, start=2):
+for i, (label, gross, per_unit) in enumerate(rows, start=2):
     ws.cell(row=i, column=1, value=label)
-    ws.cell(row=i, column=2, value=value)
+    if gross is not None:
+        ws.cell(row=i, column=2, value=gross)
+    if per_unit is not None:
+        ws.cell(row=i, column=3, value=per_unit)
+
+# Sources & Uses at Close, in its own block to the right.
+su_rows = [
+    ("Total Sources", "Total", "$ Per Unit"),
+    ("Equity", 17_000_000, 117),
+    ("Gross Debt Proceeds", 25_500_000, 176),
+    ("Total Sources", 42_500_000, 293),
+    (None, None, None),
+    ("Total Uses", "Total", "$ Per Unit"),
+    ("Purchase Price", 42_500_000, 293),
+    ("DD / Closing Costs", 420_000, 3),
+    ("Working Capital", 300_000, 2),
+    ("Equity Subtotal", 43_220_000, 298),
+    ("Financing Cost", 255_000, 2),
+    ("Total Uses", 43_475_000, 300),
+]
+for i, (label, total, per_unit) in enumerate(su_rows, start=2):
+    if label is None:
+        continue
+    ws.cell(row=i, column=6, value=label)
+    if total is not None:
+        ws.cell(row=i, column=7, value=total)
+    if per_unit is not None:
+        ws.cell(row=i, column=8, value=per_unit)
 
 ws2 = wb.create_sheet("Downside Case")
 downside_rows = [
-    ("Exit Cap Rate", 0.065),
-    ("Levered IRR", 0.081),
-    ("Unlevered IRR", 0.052),
-    ("Levered Equity Multiple", 1.32),
-    ("Unlevered Equity Multiple", 1.21),
-    ("Cash-on-Cash", 0.041),
+    ("Exit Cap Rate", None, 0.065),
+    ("Levered IRR", None, 0.081),
+    ("Unlevered IRR", None, 0.052),
+    ("Levered Equity Multiple", None, 1.32),
+    ("Unlevered Equity Multiple", None, 1.21),
+    ("Cash-on-Cash", None, 0.041),
+    ("Exit Price (Gross)", 49_300_000, 340),
 ]
-for i, (label, value) in enumerate(downside_rows, start=2):
+for i, (label, gross, per_unit) in enumerate(downside_rows, start=2):
     ws2.cell(row=i, column=1, value=label)
-    ws2.cell(row=i, column=2, value=value)
+    if gross is not None:
+        ws2.cell(row=i, column=2, value=gross)
+    if per_unit is not None:
+        ws2.cell(row=i, column=3, value=per_unit)
 
 wb.save(OUT / "sample_model.xlsx")
 

@@ -44,6 +44,8 @@ const GROUP_LABELS = {
   pricing: "Pricing",
   capital_stack: "Capital Stack",
   returns: "Returns",
+  sources_uses: "Sources & Uses",
+  per_unit: "Per-Unit Figures",
   assumptions: "Assumptions",
 };
 
@@ -223,15 +225,28 @@ function renderGapTable() {
   const container = document.getElementById("gap-table");
   container.innerHTML = "";
 
-  const total = state.gapAnalysis.length;
-  const found = state.gapAnalysis.filter((rf) => rf.provenance !== "missing").length;
+  // Headline counts required fields only. The registry also carries a lot of
+  // optional detail (per-unit figures, Sources & Uses line items) that most
+  // models don't supply, and folding those in would make the count read alarming
+  // when the deck is actually fine.
+  const required = state.gapAnalysis.filter((rf) => rf.required);
+  const requiredFound = required.filter((rf) => rf.provenance !== "missing").length;
+  const requiredMissing = required.length - requiredFound;
+  const optionalMissing = state.gapAnalysis.filter(
+    (rf) => !rf.required && rf.provenance === "missing"
+  ).length;
+
   const summary = document.getElementById("gap-summary");
-  const missingCount = total - found;
-  summary.className = "gap-summary" + (missingCount > 0 ? " has-missing" : "");
-  summary.textContent =
-    missingCount === 0
-      ? `All set — every field for the two-pager was found (${found}/${total}).`
-      : `${found} of ${total} fields found automatically — ${missingCount} still need your input below.`;
+  summary.className = "gap-summary" + (requiredMissing > 0 ? " has-missing" : "");
+
+  let text =
+    requiredMissing === 0
+      ? `All set — every required field was found (${requiredFound}/${required.length}).`
+      : `${requiredFound} of ${required.length} required fields found — ${requiredMissing} still need your input below.`;
+  if (optionalMissing) {
+    text += ` ${optionalMissing} optional field${optionalMissing === 1 ? "" : "s"} will show as “TBD” on the deck.`;
+  }
+  summary.textContent = text;
 
   const groups = {};
   for (const rf of state.gapAnalysis) {

@@ -19,19 +19,36 @@ This can't be a single zero-dependency static HTML file -- real `.xlsx`
 parsing, PDF image extraction, and `.pptx` generation all need server-side
 libraries a sandboxed browser can't run.
 
-`pptx_builder.py` is reverse-engineered from two real DivcoWest ("DW")
-two-pager decks, inspected directly via python-pptx and raw theme/XML
-parsing (including decoding text out of an embedded EMF exhibit image):
-theme "DW Colors 2021" (accent green #6AA23A, navy #002554, gold #E9A800),
-"Gandhi Sans"/"Gandhi Serif" fonts, the exact title format ("TRANSACTION
-SUMMARY / {SHORT ADDRESS}" with the property name in green), the stacked
-two-photo layout, the sentence-per-topic narrative structure, and the
-five-panel return summary (Property Overview / Pricing / Debt / Equity /
-Gross Returns) that the source decks paste in as an Excel screenshot --
-rebuilt here as native, editable pptx tables instead. Line items from the
-source decks that need a granular Sources & Uses breakdown this tool
-doesn't parse (Acquisition Cost, DD/Closing Costs, Working Capital,
-Financing Cost) are intentionally left out rather than fabricated.
+`pptx_builder.py` is measured from four real DivcoWest ("DW") two-pagers. Two
+are PPTX files whose financial exhibit is a pasted Excel screenshot; the other
+two are native-vector PDFs where the exhibit is real text, so every position,
+colour and row label comes from direct measurement of those rather than
+inference. All four agree, so this is the firm template rather than one-off
+styling.
+
+What that fixes: theme "DW Colors 2021" (green #6AA442, navy #002554, blue
+#0175A8), Gandhi Sans / Gandhi Serif, the two-tone title
+("TRANSACTION SUMMARY / {NAME}" with the name in green), the green accent rule
+and five-bar logo mark, the footer and page numbers, the stacked two-photo
+layout, the bulleted one-topic-per-line narrative, and the real exhibit: two
+side-by-side tables ("Transaction Overview" and "Sources & Uses at Close") with
+navy header bands, grey section headers, green total rows and a blue subtotal
+row. Both are rebuilt as native pptx tables so the deck stays editable, unlike
+the screenshot in the sources.
+
+Two rules the exhibit follows:
+
+- **`$ Per Unit` is never computed.** Per-unit figures are read only from a
+  `$ Per Unit` / `$ PSF` column the model states explicitly (see
+  `excel_parser._find_per_unit_columns`). Dividing a total by a unit count
+  would be inventing a number, so a model without that column leaves the
+  column showing the placeholder.
+- **Missing line items placeholder rather than disappear.** Sources & Uses rows
+  the model doesn't carry render as a visible `TBD — confirm with sponsor`.
+
+Not generated: the Location Overview map, Yield Bridge chart and Ground Lease
+Detail slides in the reference decks. Each needs hand-assembled inputs (maps,
+comp sets, tenant logos, lease abstracts) this tool has no source for.
 
 ## Data model
 

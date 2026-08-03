@@ -1,38 +1,41 @@
 """
-Builds the two-page (or three-page, if a downside case is present) offering
-summary deck.
+Builds the DivcoWest offering summary deck.
 
-Reverse-engineered from two real DivcoWest ("DW") two-pager decks (400 Castro,
-2390 Mission College), inspected directly via python-pptx + raw XML/theme
-parsing:
+Layout is measured from four real DW two-pagers. Two of them (400 Castro,
+2390 Mission College) are PPTX files whose financial exhibit is a pasted
+Excel screenshot; the other two (Landsby, Paseos) are native-vector PDFs
+where the exhibit is real text, so every position, colour and row label
+below is taken from direct measurement of those PDFs rather than inferred.
+All four agree, so this is the firm template rather than one-off styling.
 
-  - Theme: "DW Colors 2021" (ppt/theme/theme1.xml) -- accent1 green #6AA23A,
-    accent3 navy #002554, accent6 gold #E9A800, dk2 gray #626369, white bg.
-  - Fonts: "Gandhi Sans" for titles/labels/headers, "Gandhi Serif" for body
-    narrative copy.
-  - Slide 1 ("Transaction Summary"): plain white background, no header band.
-    Title top-left reads "TRANSACTION SUMMARY / {SHORT ADDRESS}", 28pt bold
-    Gandhi Sans, black with the property name in green (#6AA442, matches
-    exactly across both source decks). Two stacked property photos on the
-    left; a narrative textbox on the right written as one short paragraph
-    per topic (not one merged block) in 12-12.5pt Gandhi Serif, with defined
-    terms ("Investment"/"Property") highlighted in dark green (#3A592A).
-  - Slide 2 ("Base Case"): same title style. In both source decks this is a
-    single pasted image of a financial summary exhibit (a paste from Excel --
-    exactly the "PDF/PPT export with embedded images" case flagged in the
-    spec). Decoding the embedded EMF's text records recovered its structure:
-    Property Overview / Pricing / Debt / Equity / Gross Returns panels, each
-    a small label/value table. That structure is rebuilt here as native,
-    editable pptx tables -- not a pasted image -- using only fields this
-    tool can actually trace to the OM/model/analyst input. (Line items from
-    the source decks that require a granular Sources & Uses breakdown this
-    tool doesn't parse -- Acquisition Cost, DD/Closing Costs, Working
-    Capital, Financing Cost -- are intentionally omitted rather than
-    fabricated.)
+Measured specifics (slide is 960x540pt = 13.333x7.5in):
+  - Theme "DW Colors 2021": green #6AA442, navy #002554, blue #0175A8,
+    gray dk2 #626369. Fonts: Gandhi Sans (headings, tables), Gandhi Serif
+    (body copy).
+  - Page chrome on every slide: a 4.25pt green accent rule at (39.3,39.2)
+    -> (89.5,39.2); the five-bar DW logo mark top-right at x 905.8-934.3
+    (equal width, thickness increasing downward); an 8pt footer and a 10pt
+    page number along the bottom.
+  - Title: 28pt bold, "TRANSACTION SUMMARY / " in black followed by the
+    property name in green.
+  - Slide 1: two stacked photos at x 40.5 w 318.5 (h 176.8 each), and a
+    bulleted narrative at x 402 -> 906 in 12.5pt serif, one bullet per topic.
+  - Exhibit slide: two side-by-side native tables -- "Transaction Overview"
+    (x 95.4-539.6) and "Sources & Uses at Close" (x 549.0-864.7) -- with
+    14.6pt rows, 11.2pt text, navy header bands, #E8E8E8 section headers,
+    green total rows and a blue subtotal row. Rebuilt as real pptx tables so
+    the output stays editable, unlike the pasted screenshot in the sources.
 
-Every value placed on the slide comes from Deal.display_value(), which
-walks the OM -> model -> analyst provenance chain and falls back to the
-PLACEHOLDER string. Nothing is fabricated here.
+Every value comes from Deal.display_value(), which walks the OM -> model ->
+analyst provenance chain and falls back to PLACEHOLDER. Nothing is computed
+or fabricated here -- notably the "$ Per Unit" column is only ever populated
+from a per-unit figure the model states explicitly (see excel_parser), never
+by dividing a total by a unit count.
+
+Deliberately not generated: the Location Overview map, Yield Bridge chart and
+Ground Lease Detail slides seen in the reference decks. Each needs
+hand-assembled inputs (maps, comp sets, tenant logos, lease abstracts) that
+this tool has no source for.
 """
 import re
 
@@ -51,32 +54,130 @@ from .schema import Deal, FIELD_BY_KEY, PLACEHOLDER
 BLACK = RGBColor(0x00, 0x00, 0x00)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 GRAY_DARK = RGBColor(0x62, 0x63, 0x69)   # dk2
-GRAY_LIGHT = RGBColor(0x95, 0x96, 0x9A)  # lt2
 NAVY = RGBColor(0x00, 0x25, 0x54)        # accent3
-GOLD = RGBColor(0xE9, 0xA8, 0x00)        # accent6
-GREEN = RGBColor(0x6A, 0xA4, 0x42)       # title property-name highlight (exact value in both source decks)
+GREEN = RGBColor(0x6A, 0xA4, 0x42)       # title property-name highlight + accent rule + logo
+BLUE = RGBColor(0x01, 0x75, 0xA8)        # accent4 -- "Equity Subtotal" band
 DARK_GREEN = RGBColor(0x3A, 0x59, 0x2A)  # defined-term highlight in body copy
+SECTION_GRAY = RGBColor(0xE8, 0xE8, 0xE8)  # section / column-header rows inside the tables
 ROW_ALT = RGBColor(0xF3, 0xF4, 0xF5)
 BORDER_GRAY = RGBColor(0xD9, 0xDA, 0xDC)
 PLACEHOLDER_RED = RGBColor(0xB0, 0x2A, 0x2A)
+FOOTER_GRAY = RGBColor(0xB4, 0xB4, 0xB4)
+FOOTER_GREEN = RGBColor(0x85, 0xAB, 0x49)
+PAGENUM_GRAY = RGBColor(0xCA, 0xCA, 0xCA)
 
 SANS = "Gandhi Sans"
 SERIF = "Gandhi Serif"
 
+
+def _pt(points: float) -> int:
+    """Reference geometry is measured in points; convert to EMU."""
+    return Emu(int(round(points * 12700)))
+
+
 SLIDE_W = Inches(13.333)
 SLIDE_H = Inches(7.5)
 
-TITLE_LEFT = Inches(0.545)
-TITLE_TOP = Inches(0.813)
-TITLE_HEIGHT = Inches(0.542)
+# --- page chrome (measured) ---
+ACCENT_RULE = (_pt(39.3), _pt(39.2), _pt(50.2), Pt(4.25))  # left, top, width, thickness
+LOGO_LEFT, LOGO_WIDTH = _pt(905.8), _pt(28.5)
+LOGO_BARS = [(23.9, 1.4), (28.3, 2.3), (33.6, 3.0), (39.6, 4.5), (47.1, 6.3)]  # (top pt, height pt)
+FOOTER_TOP = _pt(514.0)
+PAGENUM_LEFT = _pt(913.0)
 
-PANELS = [
-    ("Property Overview", ["address", "property_type", "sf_or_units", "occupancy", "hold_period"]),
-    ("Pricing", ["purchase_price", "price_per_unit", "going_in_cap", "exit_cap"]),
-    ("Debt", ["leverage", "debt_rate"]),
-    ("Equity", ["initial_equity", "peak_equity"]),
-    ("Gross Returns", ["unlevered_irr", "unlevered_em", "levered_irr", "levered_em", "cash_on_cash"]),
+TITLE_LEFT = _pt(39.3)
+TITLE_TOP = _pt(55.0)
+TITLE_HEIGHT = _pt(34.0)
+TITLE_SIZE = Pt(28)
+
+# --- slide 1 ---
+PHOTO_LEFT, PHOTO_WIDTH = _pt(40.5), _pt(318.5)
+PHOTO_TOP, PHOTO_HEIGHT, PHOTO_GAP = _pt(111.0), _pt(176.8), _pt(16.9)
+BODY_LEFT, BODY_WIDTH = _pt(379.4), _pt(526.3)
+BODY_TOP, BODY_HEIGHT = _pt(111.0), _pt(370.0)
+BODY_SIZE = Pt(12.5)
+BULLET_INDENT = Pt(22.6)
+BULLET_HANG = Pt(22.6)
+
+# --- exhibit tables ---
+TABLE_TOP = _pt(120.1)
+ROW_H = _pt(14.6)
+HEADER_H = _pt(15.0)
+TABLE_SIZE = Pt(11.2)
+
+TXN_LEFT, TXN_WIDTH = _pt(95.4), _pt(444.2)
+TXN_COLS = (_pt(189.1), _pt(122.0), _pt(122.0), _pt(11.1))  # label, col2, col3, trailing spacer
+
+SU_LEFT, SU_WIDTH = _pt(549.0), _pt(315.7)
+SU_COLS = (_pt(141.0), _pt(87.0), _pt(87.7))  # label, Total, $ Per Unit
+
+# Left "Transaction Overview" table.
+# Each section: (section title | None, col2 header | None, col3 header | None, rows)
+# Each row: (deck label, col2 field key | None, col3 field key | None)
+TXN_OVERVIEW_SECTIONS = [
+    (None, None, None, [
+        ("Building Name", None, "address"),
+        # Label swapped for "Total Square Feet" when the size is stated in SF --
+        # see _size_row_label. The reference decks are multifamily, so their
+        # own wording is the unit-count one.
+        ("Units at Acquisition", None, "sf_or_units"),
+        ("Current Occupancy", None, "occupancy"),
+        ("Occupancy at Exit", None, "occupancy_at_exit"),
+        ("Projected Hold Period", None, "hold_period"),
+    ]),
+    ("Pricing", "Gross", "$ Per Unit", [
+        ("Purchase Price", "purchase_price", "purchase_price_per_unit"),
+        ("Peak Cost", "peak_cost", "peak_cost_per_unit"),
+        ("Exit Price (Gross)", "exit_price", "exit_price_per_unit"),
+    ]),
+    ("Cap Rate", None, None, [
+        ("Year 1", None, "going_in_cap"),
+        ("Market", None, "market_cap"),
+        ("Exit Cap", None, "exit_cap"),
+    ]),
+    ("Gross Returns", None, None, [
+        ("Unlevered IRR", None, "unlevered_irr"),
+        ("Unlevered CFx", None, "unlevered_em"),
+        ("Levered IRR", None, "levered_irr"),
+        ("Levered CFx", None, "levered_em"),
+    ]),
+    ("Debt", None, "Gross", [
+        ("Initial Leverage (New Debt)", "leverage", "gross_debt_proceeds"),
+    ]),
+    ("Equity", "Gross", "$ Per Unit", [
+        ("Initial Equity", "initial_equity", "initial_equity_per_unit"),
+        ("Peak Equity", "peak_equity", "peak_equity_per_unit"),
+    ]),
 ]
+
+# Right "Sources & Uses at Close" table.
+# Each block: (subheader label, rows); each row: (label, total key, per-unit key, band)
+SU_BLOCKS = [
+    ("Total Sources", [
+        ("Equity", "initial_equity", "initial_equity_per_unit", None),
+        ("Gross Debt Proceeds", "gross_debt_proceeds", "gross_debt_proceeds_per_unit", None),
+        ("Total Sources", "total_sources", "total_sources_per_unit", "green"),
+    ]),
+    ("Total Uses", [
+        ("Purchase Price", "purchase_price", "purchase_price_per_unit", None),
+        ("DD / Closing Costs", "dd_closing_costs", "dd_closing_costs_per_unit", None),
+        ("Working Capital", "working_capital", "working_capital_per_unit", None),
+        ("Equity Subtotal", "equity_subtotal", "equity_subtotal_per_unit", "blue"),
+        ("Financing Cost", "financing_cost", "financing_cost_per_unit", None),
+        ("Total Uses", "total_uses", "total_uses_per_unit", "green"),
+    ]),
+]
+
+BAND_FILLS = {"green": GREEN, "blue": BLUE}
+
+# The reference decks annotate the leverage figure in the Debt row as
+# "65.0% LTV" rather than a bare percentage.
+VALUE_SUFFIXES = {"leverage": " LTV"}
+
+# --- asset photos grid (measured from Landsby p2) ---
+GRID_COL_X = (_pt(66.4), _pt(351.5), _pt(636.7))
+GRID_ROW_Y = (_pt(98.4), _pt(304.6))
+GRID_CELL_W, GRID_CELL_H = _pt(270.4), _pt(178.0)
 
 
 def _strip_street_suffix(street: str) -> str:
@@ -95,7 +196,7 @@ def _short_title_label(address: str) -> str:
     return _strip_street_suffix(address.split(",")[0].strip()).upper()
 
 
-def _add_title(slide, address: str):
+def _add_title(slide, address: str, prefix: str = "TRANSACTION SUMMARY / "):
     box = slide.shapes.add_textbox(TITLE_LEFT, TITLE_TOP, Inches(10.5), TITLE_HEIGHT)
     tf = box.text_frame
     tf.margin_left = 0
@@ -106,19 +207,83 @@ def _add_title(slide, address: str):
     p = tf.paragraphs[0]
 
     r1 = p.add_run()
-    r1.text = "TRANSACTION SUMMARY / "
-    r1.font.size = Pt(28)
+    r1.text = prefix
+    r1.font.size = TITLE_SIZE
     r1.font.bold = True
     r1.font.name = SANS
     r1.font.color.rgb = BLACK
 
     r2 = p.add_run()
     r2.text = _short_title_label(address)
-    r2.font.size = Pt(28)
+    r2.font.size = TITLE_SIZE
     r2.font.bold = True
     r2.font.name = SANS
     r2.font.color.rgb = GREEN
     return box
+
+
+def _add_accent_rule(slide):
+    """Short green rule above the title, top-left on every reference slide."""
+    left, top, width, thickness = ACCENT_RULE
+    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, Emu(int(thickness)))
+    bar.fill.solid()
+    bar.fill.fore_color.rgb = GREEN
+    bar.line.fill.background()
+    bar.shadow.inherit = False
+    return bar
+
+
+def _add_logo_bars(slide):
+    """The DW mark: five equal-width green bars, thickness increasing downward."""
+    for top_pt, height_pt in LOGO_BARS:
+        bar = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, LOGO_LEFT, _pt(top_pt), LOGO_WIDTH, _pt(height_pt)
+        )
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = GREEN
+        bar.line.fill.background()
+        bar.shadow.inherit = False
+
+
+def _add_footer(slide, page_no: int):
+    box = slide.shapes.add_textbox(_pt(19.9), FOOTER_TOP, _pt(500), _pt(14))
+    tf = box.text_frame
+    tf.margin_left = 0
+    tf.margin_top = 0
+    p = tf.paragraphs[0]
+    for text, color, bold in (
+        ("DIVCOWEST ", FOOTER_GRAY, True),
+        ("OVERVIEW MEMORANDUM ", FOOTER_GREEN, True),
+        ("PRIVATE & CONFIDENTIAL", FOOTER_GRAY, False),
+    ):
+        run = p.add_run()
+        run.text = text
+        run.font.size = Pt(8)
+        run.font.bold = bold
+        run.font.name = SANS
+        run.font.color.rgb = color
+
+    num = slide.shapes.add_textbox(PAGENUM_LEFT, _pt(513.0), _pt(30), _pt(14))
+    ntf = num.text_frame
+    ntf.margin_left = 0
+    ntf.margin_right = 0
+    np_ = ntf.paragraphs[0]
+    np_.alignment = PP_ALIGN.RIGHT
+    nrun = np_.add_run()
+    nrun.text = str(page_no)
+    nrun.font.size = Pt(10)
+    nrun.font.name = SANS
+    nrun.font.color.rgb = PAGENUM_GRAY
+
+
+def _new_slide(prs, address: str, page_no: int, prefix: str = "TRANSACTION SUMMARY / "):
+    """A blank slide carrying the shared page chrome plus its title."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _add_accent_rule(slide)
+    _add_logo_bars(slide)
+    _add_title(slide, address, prefix=prefix)
+    _add_footer(slide, page_no)
+    return slide
 
 
 def _split_address(address: str) -> tuple[str, str]:
@@ -168,7 +333,7 @@ def _build_narrative_paragraphs(deal: Deal) -> list[str]:
 
     paras.append(
         f'The projected purchase price for the building is {dv("purchase_price")} '
-        f'({dv("price_per_unit")}), resulting in a {dv("going_in_cap")} going-in cap rate.'
+        f'({dv("purchase_price_per_unit")}), resulting in a {dv("going_in_cap")} going-in cap rate.'
     )
 
     lease_term = dv("lease_term_assumption")
@@ -197,10 +362,6 @@ def _build_narrative_paragraphs(deal: Deal) -> list[str]:
     )
 
     return paras
-
-
-BULLET_INDENT = Pt(16)
-BULLET_HANG = Pt(14)
 
 
 def _set_bullet(paragraph, char="•", color=GREEN):
@@ -246,7 +407,7 @@ def _render_narrative(slide, deal: Deal, left, top, width, height):
                 continue
             run = p.add_run()
             run.text = seg
-            run.font.size = Pt(12.5)
+            run.font.size = BODY_SIZE
             run.font.name = SERIF
             if seg == PLACEHOLDER:
                 run.font.bold = True
@@ -296,96 +457,219 @@ def _add_photos(slide, image_paths, left, top, width, height, gap=Inches(0.08)):
             pic.crop_bottom = crop
 
 
-def _build_slide1(prs, deal: Deal, hero_image_paths):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_title(slide, deal.display_value("address"))
-
-    _add_photos(slide, hero_image_paths, Inches(0.562), Inches(1.541), Inches(4.42), Inches(5.03))
-    _render_narrative(slide, deal, Inches(5.216), Inches(1.541), Inches(7.37), Inches(5.39))
+def _build_slide1(prs, deal: Deal, hero_image_paths, page_no: int):
+    slide = _new_slide(prs, deal.display_value("address"), page_no)
+    total_photo_h = Emu(int(PHOTO_HEIGHT) * 2 + int(PHOTO_GAP))
+    _add_photos(slide, hero_image_paths, PHOTO_LEFT, PHOTO_TOP, PHOTO_WIDTH, total_photo_h, gap=PHOTO_GAP)
+    _render_narrative(slide, deal, BODY_LEFT, BODY_TOP, BODY_WIDTH, BODY_HEIGHT)
     return slide
 
 
-def _panel_table(slide, deal: Deal, title, keys, left, top, width):
-    row_h = Inches(0.28)
-    header_h = Inches(0.32)
-    rows = len(keys) + 1
-
-    table_shape = slide.shapes.add_table(rows, 2, left, top, width, header_h + row_h * len(keys))
-    table = table_shape.table
-    table.columns[0].width = Emu(int(width * 0.6))
-    table.columns[1].width = Emu(int(width * 0.4))
-    table.rows[0].height = header_h
-    for r in range(1, rows):
-        table.rows[r].height = row_h
-
-    header_cell = table.cell(0, 0)
-    header_cell.merge(table.cell(0, 1))
-    header_cell.fill.solid()
-    header_cell.fill.fore_color.rgb = NAVY
-    header_cell.text = title.upper()
-    hp = header_cell.text_frame.paragraphs[0]
-    hp.alignment = PP_ALIGN.LEFT
-    hr = hp.runs[0]
-    hr.font.size = Pt(10.5)
-    hr.font.bold = True
-    hr.font.name = SANS
-    hr.font.color.rgb = WHITE
-
-    for i, key in enumerate(keys, start=1):
-        label = FIELD_BY_KEY[key].label
-        value = deal.display_value(key)
-        row_fill = WHITE if i % 2 else ROW_ALT
-        for col, (text, align, bold) in enumerate([(label, PP_ALIGN.LEFT, False), (value, PP_ALIGN.RIGHT, True)]):
-            cell = table.cell(i, col)
-            cell.fill.solid()
-            cell.fill.fore_color.rgb = row_fill
-            cell.margin_left = Pt(6)
-            cell.margin_right = Pt(6)
-            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-            cell.text = str(text)
-            p = cell.text_frame.paragraphs[0]
-            p.alignment = align
-            run = p.runs[0]
-            run.font.size = Pt(10)
-            run.font.bold = bold
-            run.font.name = SANS
-            run.font.color.rgb = PLACEHOLDER_RED if text == PLACEHOLDER else GRAY_DARK
-
-    return table_shape
+def _size_row_label(deal: Deal, default: str) -> str:
+    """Keep the size row's label honest: an SF figure must not sit under a
+    row captioned "Units at Acquisition"."""
+    value = deal.display_value("sf_or_units")
+    if value != PLACEHOLDER and re.search(r"\b(SF|RSF|square feet)\b", value, re.IGNORECASE):
+        return "Total Square Feet"
+    return default
 
 
-def _build_return_slide(prs, deal: Deal, address: str, case_label: str | None = None):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_title(slide, address)
+def _cell_value(deal: Deal, key: str | None) -> str:
+    """Resolved display value for a table cell, with any unit annotation the
+    reference decks add. Placeholders are passed through untouched so they
+    still render as the plain red 'TBD' string."""
+    if not key:
+        return ""
+    value = deal.display_value(key)
+    if value == PLACEHOLDER:
+        return value
+    return value + VALUE_SUFFIXES.get(key, "")
 
-    if case_label:
-        tag = slide.shapes.add_textbox(TITLE_LEFT, Inches(1.28), Inches(3.0), Inches(0.32))
-        tf = tag.text_frame
-        tf.margin_left = 0
-        p = tf.paragraphs[0]
-        run = p.add_run()
-        run.text = case_label.upper()
-        run.font.size = Pt(12)
-        run.font.bold = True
-        run.font.name = SANS
-        run.font.color.rgb = GOLD
 
-    panel_top = Inches(1.75)
-    panel_width = Inches(2.35)
-    gap = Inches(0.12)
-    left = TITLE_LEFT
-    for title, keys in PANELS:
-        _panel_table(slide, deal, title, keys, left, panel_top, panel_width)
-        left = Emu(int(left) + int(panel_width) + int(gap))
+_BORDER_TAGS = ("a:lnL", "a:lnR", "a:lnT", "a:lnB")
 
-    footer = slide.shapes.add_textbox(TITLE_LEFT, Inches(7.05), Inches(12.4), Inches(0.35))
-    tf = footer.text_frame
-    tf.text = "Every figure above traces to the OM, the underwriting model, or an explicit analyst input -- nothing is estimated."
+
+def _clear_cell_borders(cell):
+    """The reference exhibit has no gridlines -- only fills separate the rows.
+    python-pptx's default table style draws borders, so switch them off."""
+    tcPr = cell._tc.get_or_add_tcPr()
+    for tag in _BORDER_TAGS:
+        existing = tcPr.find(qn(tag))
+        if existing is not None:
+            tcPr.remove(existing)
+        ln = etree.SubElement(tcPr, qn(tag))
+        etree.SubElement(ln, qn("a:noFill"))
+
+
+def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fill=None):
+    """Write one table cell. PLACEHOLDER text always renders red so missing
+    data is obvious on the deck itself."""
+    if fill is not None:
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = fill
+    else:
+        cell.fill.background()
+    _clear_cell_borders(cell)
+    cell.margin_left = Pt(5)
+    cell.margin_right = Pt(5)
+    cell.margin_top = 0
+    cell.margin_bottom = 0
+    cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+    tf = cell.text_frame
+    tf.word_wrap = False
     p = tf.paragraphs[0]
-    p.runs[0].font.size = Pt(9)
-    p.runs[0].font.italic = True
-    p.runs[0].font.name = SERIF
-    p.runs[0].font.color.rgb = GRAY_LIGHT
+    p.alignment = align
+    run = p.add_run()
+    run.text = str(text)
+    run.font.size = TABLE_SIZE
+    run.font.bold = bold
+    run.font.name = SANS
+    # Placeholders normally go red to flag the gap, but red on a dark band is
+    # unreadable -- there the passed-in colour (white) already stands out.
+    on_dark_band = fill in (NAVY, GREEN, BLUE)
+    run.font.color.rgb = PLACEHOLDER_RED if (text == PLACEHOLDER and not on_dark_band) else color
+
+
+def _new_table(slide, left, top, width, col_widths, n_rows):
+    shape = slide.shapes.add_table(n_rows, len(col_widths), left, top, width, Emu(int(HEADER_H) + int(ROW_H) * (n_rows - 1)))
+    table = shape.table
+    for i, cw in enumerate(col_widths):
+        table.columns[i].width = cw
+    table.rows[0].height = HEADER_H
+    for r in range(1, n_rows):
+        table.rows[r].height = ROW_H
+    # python-pptx tables default to a banded first-row/column style; turn the
+    # theming off so our explicit fills are what actually shows.
+    tbl = table._tbl.tblPr
+    tbl.set("firstRow", "0")
+    tbl.set("bandRow", "0")
+    return shape, table
+
+
+def _fill_header_band(table, row: int, title: str, n_cols: int):
+    """Navy band spanning the table with the block title centred across it."""
+    for c in range(n_cols):
+        _style_cell(table.cell(row, c), "", fill=NAVY)
+    origin = table.cell(row, 0)
+    origin.merge(table.cell(row, n_cols - 1))
+    _style_cell(origin, title, bold=True, color=WHITE, align=PP_ALIGN.CENTER, fill=NAVY)
+
+
+def _build_txn_overview_table(slide, deal: Deal):
+    n_cols = len(TXN_COLS)
+    rows = [("header", "Transaction Overview", None, None)]
+    for title, c2h, c3h, section_rows in TXN_OVERVIEW_SECTIONS:
+        if title is not None:
+            rows.append(("section", title, c2h, c3h))
+        for label, c2, c3 in section_rows:
+            rows.append(("data", label, c2, c3))
+
+    _, table = _new_table(slide, TXN_LEFT, TABLE_TOP, TXN_WIDTH, TXN_COLS, len(rows))
+
+    for r, (kind, a, b, c) in enumerate(rows):
+        if kind == "header":
+            _fill_header_band(table, r, a, n_cols)
+        elif kind == "section":
+            for col in range(n_cols):
+                _style_cell(table.cell(r, col), "", fill=SECTION_GRAY)
+            _style_cell(table.cell(r, 0), a, bold=True, fill=SECTION_GRAY)
+            if b:
+                _style_cell(table.cell(r, 1), b, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
+            if c:
+                _style_cell(table.cell(r, 2), c, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
+        else:
+            if c == "sf_or_units":
+                a = _size_row_label(deal, a)
+            _style_cell(table.cell(r, 0), a)
+            _style_cell(table.cell(r, 1), _cell_value(deal, b), align=PP_ALIGN.CENTER)
+            _style_cell(table.cell(r, 2), _cell_value(deal, c), align=PP_ALIGN.CENTER)
+            _style_cell(table.cell(r, 3), "")
+
+
+def _build_sources_uses_table(slide, deal: Deal):
+    n_cols = len(SU_COLS)
+    rows = [("header", "Sources & Uses at Close", None, None, None)]
+    for i, (subheader, block_rows) in enumerate(SU_BLOCKS):
+        if i:
+            rows.append(("spacer", "", None, None, None))
+        rows.append(("section", subheader, "Total", "$ Per Unit", None))
+        for label, total_key, pu_key, band in block_rows:
+            rows.append(("data", label, total_key, pu_key, band))
+
+    _, table = _new_table(slide, SU_LEFT, TABLE_TOP, SU_WIDTH, SU_COLS, len(rows))
+
+    for r, (kind, a, b, c, band) in enumerate(rows):
+        if kind == "header":
+            _fill_header_band(table, r, a, n_cols)
+        elif kind == "spacer":
+            for col in range(n_cols):
+                _style_cell(table.cell(r, col), "")
+        elif kind == "section":
+            for col in range(n_cols):
+                _style_cell(table.cell(r, col), "", fill=SECTION_GRAY)
+            _style_cell(table.cell(r, 0), a, bold=True, fill=SECTION_GRAY)
+            _style_cell(table.cell(r, 1), b, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
+            _style_cell(table.cell(r, 2), c, bold=True, align=PP_ALIGN.CENTER, fill=SECTION_GRAY)
+        else:
+            fill = BAND_FILLS.get(band)
+            color = WHITE if fill is not None else BLACK
+            bold = fill is not None
+            _style_cell(table.cell(r, 0), a, bold=bold, color=color, fill=fill)
+            _style_cell(table.cell(r, 1), _cell_value(deal, b), bold=bold, color=color,
+                        align=PP_ALIGN.RIGHT, fill=fill)
+            _style_cell(table.cell(r, 2), _cell_value(deal, c), bold=bold, color=color,
+                        align=PP_ALIGN.RIGHT, fill=fill)
+
+
+def _build_exhibit_slide(prs, deal: Deal, address: str, page_no: int, case_label: str | None = None):
+    prefix = "TRANSACTION OVERVIEW / " if case_label else "TRANSACTION SUMMARY / "
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _add_accent_rule(slide)
+    _add_logo_bars(slide)
+    _add_footer(slide, page_no)
+
+    # With a named case, the reference decks put the case in the green slot
+    # ("TRANSACTION OVERVIEW / 10Y Hold"); otherwise the property name goes there.
+    box = slide.shapes.add_textbox(TITLE_LEFT, TITLE_TOP, Inches(10.5), TITLE_HEIGHT)
+    tf = box.text_frame
+    tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    p = tf.paragraphs[0]
+    r1 = p.add_run()
+    r1.text = prefix
+    r1.font.size = TITLE_SIZE
+    r1.font.bold = True
+    r1.font.name = SANS
+    r1.font.color.rgb = BLACK
+    r2 = p.add_run()
+    r2.text = case_label if case_label else _short_title_label(address)
+    r2.font.size = TITLE_SIZE
+    r2.font.bold = True
+    r2.font.name = SANS
+    r2.font.color.rgb = GREEN
+
+    _build_txn_overview_table(slide, deal)
+    _build_sources_uses_table(slide, deal)
+    return slide
+
+
+def _build_asset_photos_slide(prs, deal: Deal, image_paths, page_no: int):
+    """3x2 grid of OM photos, matching the reference "ASSET PHOTOS" slide."""
+    slide = _new_slide(prs, deal.display_value("address"), page_no, prefix="ASSET PHOTOS / ")
+    for i, path in enumerate(image_paths[:6]):
+        left = GRID_COL_X[i % 3]
+        top = GRID_ROW_Y[i // 3]
+        pic = slide.shapes.add_picture(path, left, top, width=GRID_CELL_W, height=GRID_CELL_H)
+        native_w, native_h = pic.image.size
+        target_ratio = GRID_CELL_W / GRID_CELL_H
+        native_ratio = native_w / native_h
+        if native_ratio > target_ratio:
+            crop = (1 - target_ratio / native_ratio) / 2
+            pic.crop_left = pic.crop_right = crop
+        else:
+            crop = (1 - native_ratio / target_ratio) / 2
+            pic.crop_top = pic.crop_bottom = crop
     return slide
 
 
@@ -394,14 +678,24 @@ def build_deck(deal: Deal, hero_image_path, output_path: str, downside_deal: Dea
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
 
-    hero_image_paths = hero_image_path if isinstance(hero_image_path, list) else [hero_image_path]
+    image_paths = hero_image_path if isinstance(hero_image_path, list) else [hero_image_path]
+    image_paths = [p for p in image_paths if p]
     address = deal.display_value("address")
 
-    _build_slide1(prs, deal, hero_image_paths)
-    _build_return_slide(prs, deal, address, case_label="Base Case" if downside_deal is not None else None)
+    page = 0
+    _build_slide1(prs, deal, image_paths, page)
+
+    page += 1
+    _build_exhibit_slide(prs, deal, address, page,
+                         case_label="Base Case" if downside_deal is not None else None)
 
     if downside_deal is not None:
-        _build_return_slide(prs, downside_deal, address, case_label="Downside Case")
+        page += 1
+        _build_exhibit_slide(prs, downside_deal, address, page, case_label="Downside Case")
+
+    if len(image_paths) >= 3:
+        page += 1
+        _build_asset_photos_slide(prs, deal, image_paths, page)
 
     prs.save(output_path)
     return output_path

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
+from pptx.enum.dml import MSO_FILL
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
 from pptx.util import Emu
@@ -116,6 +117,17 @@ def _draw_text_frame(draw, shape, scale, box):
             draw.text((bullet_x, y), char, font=bullet_font, fill=bullet_color)
 
         lines = _wrap_text(draw, text, font, width - 8 - text_indent_px)
+
+        # Single-run paragraphs wrap normally. Multi-run paragraphs that fit on
+        # one line are drawn run-by-run so per-run colour survives (the two-tone
+        # title, green defined terms, red placeholders); longer mixed-run
+        # paragraphs fall back to wrapping in the first run's style.
+        if len(runs) > 1 and len(lines) == 1:
+            _draw_runs(draw, runs, left + text_indent_px, y, width - text_indent_px,
+                       font.size, scale, align, default_size=size_pt)
+            y += font.size + 4
+            continue
+
         for line in lines:
             line_w = draw.textlength(line, font=font)
             if align is not None and str(align).endswith("CENTER (2)"):
@@ -144,6 +156,21 @@ def _draw_picture(canvas, shape, scale, box):
     canvas.paste(img, (int(left), int(top)))
 
 
+def _cell_fill(cell):
+    """Solid fill colour of a table cell, or None when it has no solid fill.
+
+    Guarding on `fill.type is not None` isn't enough: an explicitly
+    background-filled cell has a type but no foreground colour, and asking for
+    one raises.
+    """
+    try:
+        if cell.fill.type == MSO_FILL.SOLID:
+            return _rgb(cell.fill.fore_color)
+    except Exception:
+        pass
+    return None
+
+
 def _draw_table(canvas, draw, shape, scale, box):
     table = shape.table
     left, top, _, _ = box
@@ -155,24 +182,57 @@ def _draw_table(canvas, draw, shape, scale, box):
         x = left
         for c_idx, cell in enumerate(row.cells):
             cw, rh = col_widths[c_idx], row_heights[r_idx]
-            fill = _rgb(cell.fill.fore_color) if cell.fill.type is not None else (255, 255, 255)
-            draw.rectangle([x, y, x + cw, y + rh], fill=fill, outline=(210, 212, 217))
-            text = "".join(run.text for para in cell.text_frame.paragraphs for run in para.runs)
-            if text:
-                first_run = next((run for para in cell.text_frame.paragraphs for run in para.runs), None)
-                size_pt = first_run.font.size.pt if (first_run and first_run.font.size) else 11
-                bold = bool(first_run.font.bold) if first_run else False
-                color = _rgb(first_run.font.color) if first_run else (50, 55, 65)
-                font = _font(size_pt * scale * 1.15, bold)
-                para_align = cell.text_frame.paragraphs[0].alignment
-                text_w = draw.textlength(text, font=font)
-                if para_align is not None and "RIGHT" in str(para_align):
-                    tx = x + cw - text_w - 6
-                else:
-                    tx = x + 6
-                draw.text((tx, y + rh / 2 - font.size / 2), text, font=font, fill=color)
-            x += cw
+            # Cells covered by a merge repeat the origin cell's content; drawing
+            # them would double up the text and re-stroke the interior borders.
+            if getattr(cell, "is_spanned", False):
+                x += cw
+                continue
+            if getattr(cell, "span_width", 1) > 1:
+                cw = sum(col_widths[c_idx:c_idx + cell.span_width])
+            if getattr(cell, "span_height", 1) > 1:
+                rh = sum(row_heights[r_idx:r_idx + cell.span_height])
+
+            # No outline: the decks we render switch cell borders off and
+            # separate rows with fills alone, so stroking here would invent
+            # gridlines that aren't in the real file.
+            fill = _cell_fill(cell)
+            if fill is not None:
+                draw.rectangle([x, y, x + cw, y + rh], fill=fill)
+
+            para = cell.text_frame.paragraphs[0]
+            runs = [r for p in cell.text_frame.paragraphs for r in p.runs if r.text]
+            if runs:
+                _draw_runs(draw, runs, x, y, cw, rh, scale, para.alignment, default_size=11)
+            x += col_widths[c_idx]
         y += row_heights[r_idx]
+
+
+def _draw_runs(draw, runs, x, y, width, height, scale, align, default_size=11):
+    """Draw a cell's runs on one baseline, honouring each run's own styling.
+
+    Styling per run matters here: the exhibit's placeholder cells colour just
+    the `TBD` text red, and the slide titles are two-tone.
+    """
+    pieces = []
+    for run in runs:
+        size_pt = run.font.size.pt if run.font.size else default_size
+        font = _font(size_pt * scale * 1.15, bool(run.font.bold))
+        pieces.append((run.text, font, _rgb(run.font.color)))
+
+    total_w = sum(draw.textlength(t, font=f) for t, f, _ in pieces)
+    tallest = max(f.size for _, f, _ in pieces)
+
+    if align is not None and "RIGHT" in str(align):
+        tx = x + width - total_w - 6
+    elif align is not None and str(align).endswith("CENTER (2)"):
+        tx = x + max((width - total_w) / 2, 0)
+    else:
+        tx = x + 6
+
+    ty = y + height / 2 - tallest / 2
+    for text, font, color in pieces:
+        draw.text((tx, ty), text, font=font, fill=color)
+        tx += draw.textlength(text, font=font)
 
 
 def _draw_shape(canvas, draw, shape, scale):
