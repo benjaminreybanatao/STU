@@ -19,10 +19,13 @@ scanned into a second result set, so a model with a Base Case tab and a
 Downside tab produces two comparable KPI sets for slide 2 / slide 2b.
 
 Memo Charts sheet: if the workbook has a tab named "Memo Charts" (or "Memo
-Chart"), the base-case exhibit is scanned from that sheet exclusively instead
-of the whole workbook. That tab is meant to hold the deck's own numbers, so
-it's a more reliable source than scanning underwriting tabs where the same
-label can appear more than once or sit beside an unrelated figure.
+Chart"), a value found there for a given field wins over the same field found
+anywhere else -- that tab is meant to hold the deck's own numbers, so it's a
+more reliable source than an underwriting tab where the same label can appear
+more than once or sit beside an unrelated figure. It only overrides fields it
+actually has a value for, though: a field the Memo Charts tab is silent on
+still falls back to the whole-workbook scan rather than disappearing from the
+deck.
 """
 import re
 from datetime import datetime
@@ -73,8 +76,9 @@ DOWNSIDE_SHEET_RE = re.compile(r"downside|bear|stress|sensitivity", re.IGNORECAS
 # out cleanly for that purpose -- as opposed to the underwriting tabs, where
 # the same label can appear multiple times or sit next to unrelated numbers
 # and trip up the label-adjacent scan (e.g. an LTV row's dollar figure getting
-# read as "Total Sources"). When a sheet like that exists, the exhibit's
-# numbers come from it exclusively rather than the whole-workbook scan.
+# read as "Total Sources"). When a sheet like that exists, its values win over
+# the same fields found elsewhere; fields it doesn't have still come from the
+# whole-workbook scan.
 MEMO_CHARTS_SHEET_RE = re.compile(r"memo\s*charts?", re.IGNORECASE)
 
 # A "$ Per Unit" / "$ PSF" column header in the model. When present, each
@@ -298,12 +302,20 @@ def extract_facts(xlsx_path: str, cell_map: dict | None = None) -> dict:
     memo_sheet_names = [ws.title for ws in wb.worksheets if MEMO_CHARTS_SHEET_RE.search(ws.title)]
     has_named_scenarios = any(DOWNSIDE_SHEET_RE.search(ws.title) for ws in wb.worksheets)
 
-    if memo_sheet_names:
-        base_facts = _scan_workbook(wb, sheet_filter=lambda name: name in memo_sheet_names)
-    elif has_named_scenarios:
-        base_facts = _scan_workbook(wb, sheet_filter=lambda name: not DOWNSIDE_SHEET_RE.search(name))
+    if has_named_scenarios:
+        whole_workbook_facts = _scan_workbook(wb, sheet_filter=lambda name: not DOWNSIDE_SHEET_RE.search(name))
     else:
-        base_facts = _scan_workbook(wb)
+        whole_workbook_facts = _scan_workbook(wb)
+
+    if memo_sheet_names:
+        # The Memo Charts tab is the more reliable source when it has a
+        # figure, but it doesn't necessarily carry every field the exhibit
+        # needs -- fields it's silent on still come from the whole-workbook
+        # scan rather than disappearing from the deck.
+        memo_facts = _scan_workbook(wb, sheet_filter=lambda name: name in memo_sheet_names)
+        base_facts = {**whole_workbook_facts, **memo_facts}
+    else:
+        base_facts = whole_workbook_facts
 
     downside_facts = (
         _scan_workbook(wb, sheet_filter=lambda name: bool(DOWNSIDE_SHEET_RE.search(name)))
