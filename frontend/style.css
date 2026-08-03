@@ -415,7 +415,7 @@ button:disabled { background: var(--gray-7); cursor: not-allowed; transform: non
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   animation: popIn 0.35s var(--ease);
 }
-.access-logo { height: 20px; margin: 0 auto 18px; }
+.access-logo { height: 15px; margin: 0 auto 20px; }
 .access-card h2 {
   margin: 0 0 8px;
   font-size: 15px;
