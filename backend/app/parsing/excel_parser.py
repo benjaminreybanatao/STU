@@ -155,6 +155,24 @@ def _is_label_like(text: str, patterns: dict[str, list[re.Pattern]]) -> bool:
     return any(r.search(stripped) for regs in patterns.values() for r in regs)
 
 
+def _is_plausible(key: str, value: float) -> bool:
+    """Reject a numeric cell that can't be the field it was matched to.
+
+    Firm models put several figures on one row -- an LTV row typically carries
+    both "65.0%" and the gross debt dollars. Taking the first numeric to the
+    right of the label would read the dollar amount as the percentage and
+    render "26650000% LTV", so ratio-shaped fields get a sanity range and the
+    scan moves on to the next column when a candidate falls outside it.
+    """
+    if key in PERCENT_KEYS:
+        # Either a fraction (0.65) or whole percent (65). Occupancy and
+        # cash-on-cash can exceed 100, so allow generous headroom.
+        return abs(value) <= 300
+    if key in MULTIPLE_KEYS:
+        return abs(value) <= 100  # equity multiples live around 1-5x
+    return True
+
+
 def _pick_value(ws, row: int, col: int, key: str, patterns: dict[str, list[re.Pattern]]):
     """Find the value belonging to a label at (row, col).
 
@@ -171,9 +189,13 @@ def _pick_value(ws, row: int, col: int, key: str, patterns: dict[str, list[re.Pa
     for raw in candidates:
         if raw is None or raw == "":
             continue
+        if isinstance(raw, bool):
+            continue
         if isinstance(raw, str):
             if numeric_only or _is_label_like(raw, patterns):
                 continue
+        elif isinstance(raw, (int, float)) and not _is_plausible(key, raw):
+            continue
         return raw
     return None
 
