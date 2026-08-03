@@ -170,6 +170,10 @@ SU_BLOCKS = [
 
 BAND_FILLS = {"green": GREEN, "blue": BLUE}
 
+# Short form of PLACEHOLDER for the exhibit's narrow numeric columns, which
+# don't wrap. Still unmistakably a gap, and still rendered in red.
+TABLE_PLACEHOLDER = "TBD"
+
 # The reference decks annotate the leverage figure in the Debt row as
 # "65.0% LTV" rather than a bare percentage.
 VALUE_SUFFIXES = {"leverage": " LTV"}
@@ -194,6 +198,19 @@ def _short_title_label(address: str) -> str:
     if address == PLACEHOLDER:
         return "PROPERTY TBD"
     return _strip_street_suffix(address.split(",")[0].strip()).upper()
+
+
+def _building_name(address: str) -> str:
+    """The exhibit's "Building Name" cell takes the street portion only.
+
+    The reference decks put a short building name there ("Landsby",
+    "Paesos at Ontario"). A full postal address is roughly twice the width of
+    that column, and since these cells don't wrap it would spill across the
+    gap into the Sources & Uses table beside it.
+    """
+    if address == PLACEHOLDER:
+        return address
+    return address.split(",")[0].strip()
 
 
 def _add_title(slide, address: str, prefix: str = "TRANSACTION SUMMARY / "):
@@ -474,16 +491,22 @@ def _size_row_label(deal: Deal, default: str) -> str:
     return default
 
 
-def _cell_value(deal: Deal, key: str | None) -> str:
-    """Resolved display value for a table cell, with any unit annotation the
-    reference decks add. Placeholders are passed through untouched so they
-    still render as the plain red 'TBD' string."""
+def _cell_value(deal: Deal, key: str | None) -> tuple[str, bool]:
+    """(text, is_placeholder) for a table cell, with any unit annotation the
+    reference decks add.
+
+    Missing values collapse to the short TABLE_PLACEHOLDER: the full
+    "TBD -- confirm with sponsor" wording is ~1.4x the width of these numeric
+    columns and they don't wrap, so the long form would overlap its
+    neighbours. The full wording still appears in the slide 1 narrative and in
+    the gap-analysis panel; here the red short form carries the same meaning.
+    """
     if not key:
-        return ""
+        return "", False
     value = deal.display_value(key)
     if value == PLACEHOLDER:
-        return value
-    return value + VALUE_SUFFIXES.get(key, "")
+        return TABLE_PLACEHOLDER, True
+    return value + VALUE_SUFFIXES.get(key, ""), False
 
 
 _BORDER_TAGS = ("a:lnL", "a:lnR", "a:lnT", "a:lnB")
@@ -501,9 +524,10 @@ def _clear_cell_borders(cell):
         etree.SubElement(ln, qn("a:noFill"))
 
 
-def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fill=None):
-    """Write one table cell. PLACEHOLDER text always renders red so missing
-    data is obvious on the deck itself."""
+def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fill=None,
+                is_placeholder=False):
+    """Write one table cell. Placeholders render red so missing data is
+    obvious on the deck itself."""
     if fill is not None:
         cell.fill.solid()
         cell.fill.fore_color.rgb = fill
@@ -528,7 +552,7 @@ def _style_cell(cell, text, *, bold=False, color=BLACK, align=PP_ALIGN.LEFT, fil
     # Placeholders normally go red to flag the gap, but red on a dark band is
     # unreadable -- there the passed-in colour (white) already stands out.
     on_dark_band = fill in (NAVY, GREEN, BLUE)
-    run.font.color.rgb = PLACEHOLDER_RED if (text == PLACEHOLDER and not on_dark_band) else color
+    run.font.color.rgb = PLACEHOLDER_RED if (is_placeholder and not on_dark_band) else color
 
 
 def _new_table(slide, left, top, width, col_widths, n_rows):
@@ -581,9 +605,13 @@ def _build_txn_overview_table(slide, deal: Deal):
         else:
             if c == "sf_or_units":
                 a = _size_row_label(deal, a)
+            v2, ph2 = _cell_value(deal, b)
+            v3, ph3 = _cell_value(deal, c)
+            if c == "address" and not ph3:
+                v3 = _building_name(v3)
             _style_cell(table.cell(r, 0), a)
-            _style_cell(table.cell(r, 1), _cell_value(deal, b), align=PP_ALIGN.CENTER)
-            _style_cell(table.cell(r, 2), _cell_value(deal, c), align=PP_ALIGN.CENTER)
+            _style_cell(table.cell(r, 1), v2, align=PP_ALIGN.CENTER, is_placeholder=ph2)
+            _style_cell(table.cell(r, 2), v3, align=PP_ALIGN.CENTER, is_placeholder=ph3)
             _style_cell(table.cell(r, 3), "")
 
 
@@ -615,11 +643,13 @@ def _build_sources_uses_table(slide, deal: Deal):
             fill = BAND_FILLS.get(band)
             color = WHITE if fill is not None else BLACK
             bold = fill is not None
+            v1, ph1 = _cell_value(deal, b)
+            v2, ph2 = _cell_value(deal, c)
             _style_cell(table.cell(r, 0), a, bold=bold, color=color, fill=fill)
-            _style_cell(table.cell(r, 1), _cell_value(deal, b), bold=bold, color=color,
-                        align=PP_ALIGN.RIGHT, fill=fill)
-            _style_cell(table.cell(r, 2), _cell_value(deal, c), bold=bold, color=color,
-                        align=PP_ALIGN.RIGHT, fill=fill)
+            _style_cell(table.cell(r, 1), v1, bold=bold, color=color,
+                        align=PP_ALIGN.RIGHT, fill=fill, is_placeholder=ph1)
+            _style_cell(table.cell(r, 2), v2, bold=bold, color=color,
+                        align=PP_ALIGN.RIGHT, fill=fill, is_placeholder=ph2)
 
 
 def _build_exhibit_slide(prs, deal: Deal, address: str, page_no: int, case_label: str | None = None):
