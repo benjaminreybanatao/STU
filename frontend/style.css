@@ -453,3 +453,18 @@ button:disabled { background: var(--gray-7); cursor: not-allowed; transform: non
   margin: 12px 0 0;
   font-style: italic;
 }
+
+/* ---------- mobile ---------- */
+@media (max-width: 640px) {
+  .topbar-accent { display: none; }
+  .topbar-main { padding: 16px 20px; gap: 12px; }
+  .topbar h1 { font-size: 15px; }
+  .title-expansion { display: block; margin-top: 1px; }
+  .tagline { display: none; }
+  main { padding: 20px 16px 40px; }
+  .steps { margin-bottom: 20px; }
+  .step { font-size: 10.5px; gap: 6px; }
+  .step:not(:last-child)::after { width: 20px; margin: 0 6px; }
+  .card { padding: 20px; }
+  .access-card { max-width: calc(100% - 40px); }
+}
